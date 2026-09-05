@@ -434,7 +434,14 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 						draw()
 					}
 					continue
+				case 'C', 'D': // Right, Left
+					continue
 				}
+			}
+
+			// Any unhandled multi-byte escape sequence should be ignored (not treated as standalone Esc)
+			if len(input) > 1 && input[0] == 0x1b {
+				continue
 			}
 
 			ch := input[0]
