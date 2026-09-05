@@ -1,8 +1,8 @@
 # ports
 
-> **Know what's using your port. Without remembering `lsof`, `ss`, `ps`, and `/proc` incantations.**
+`ports` is a small Linux CLI written in Go that answers one question: **what is listening on this port, and what process owns it?**
 
-Instead of:
+Instead of remembering and chaining tools:
 
 ```bash
 lsof -i :3000
@@ -10,24 +10,24 @@ ps -p 18421 -o etime,cwd,args
 kill -9 18421
 ```
 
-just:
+you run:
 
 ```bash
 ports 3000
 ```
 
 ```text
-● Port 3000 (TCP)
-  Interface:  127.0.0.1
-  Process:    node
-  PID:        18421
-  User:       abhi (current user)
-  CWD:        ~/projects/api
-  Command:    node server.js
-  Uptime:     12m 31s
+● Port 3000  [TCP]
+  Interface: 127.0.0.1 (localhost)
+  Process:   node
+  PID:       18421
+  User:      elish4h (current user)
+  CWD:       ~/projects/api
+  Command:   node server.js
+  Uptime:    14m 32s
 ```
 
-and when you want to terminate it safely:
+and when you need to stop it:
 
 ```bash
 ports kill 3000
@@ -35,40 +35,52 @@ ports kill 3000
 
 ---
 
-## 1. Why `ports`?
+## Why it exists
 
-When a port conflict happens during development or deployment, developers inevitably end up chaining commands together: `lsof -i :<port>`, copying the PID, running `ps` to check what it is, and running `kill -9`.
+When a local port conflict happens during development, the typical fix involves running `lsof` or `ss`, copying a PID, inspecting `ps` to make sure it's the right process, and then killing it. If you aren't running as root, `lsof` often prints nothing at all without explaining why.
 
-`ports` collapses this recurring terminal friction into a single, predictable, Unix-native binary.
-
-- **Fast & Direct**: Directly parses `/proc/net/{tcp,tcp6,udp,udp6}` and `/proc/<pid>/fd/*`. Does not shell out to `lsof`, `ss`, or `netstat`.
-- **Human First, Machine Compatible**: Beautiful tabular output on interactive terminals, clean uncolored output when piped, and strict JSON on demand.
-- **Safe by Default**: Process kills default to `SIGTERM`, prompt for confirmation, and refuse to kill when multiple processes share a port.
-- **Zero Configuration**: Single standalone binary with zero runtime dependencies.
+`ports` directly parses the Linux kernel's socket tables in `/proc/net/` and maps socket inodes back to processes via `/proc/<pid>/fd/`. It doesn't shell out to external binaries, requires no background daemon or configuration, and handles unprivileged permissions cleanly by showing socket owners even when individual process details require elevation.
 
 ---
 
-## 2. Installation
+## Installation
 
-### From Source (Go 1.22+)
+### From source (Go 1.22+)
 
 ```bash
-git clone https://github.com/abhi/ports.git
+git clone https://github.com/abhi-vmlinuz/ports.git
 cd ports
 make install
 ```
 
-Or install with `go install`:
+This builds the binary to `bin/ports`, installs it to `/usr/local/bin` (or `~/.local/bin`), and automatically registers shell completions for Fish and Zsh.
+
+You can also install directly with the Go toolchain:
 
 ```bash
 go install ./cmd/ports
 ```
 
+### Running without sudo (Linux Capabilities)
+
+On Linux, `/proc/<pid>/fd/` has `0700` permissions owned by the process's user. Reading another user's file descriptors (such as system daemons or containers running as root) requires elevation.
+
+Rather than running the binary under `sudo` or using dangerous `setuid root` permissions, you can grant `ports` the single capability it needs to read file descriptors:
+
+```bash
+make setcap
+# runs: sudo setcap cap_sys_ptrace+ep /usr/local/bin/ports
+```
+
+`CAP_SYS_PTRACE` allows reading `/proc/<pid>/fd/` symlinks across all users without granting network administration or write permissions.
+
 ---
 
-## 3. Usage
+## Usage
 
-### List All Listening Ports
+### List listening ports
+
+Running `ports` with no arguments prints a sorted table of all active TCP listeners and locally bound UDP endpoints:
 
 ```bash
 ports
@@ -77,36 +89,42 @@ ports
 ```text
 PORT    PROTO  ADDRESS      PROCESS   PID    USER
 22      tcp    0.0.0.0      sshd      812    root
-3000    tcp    127.0.0.1    node      18421  abhi
+3000    tcp    127.0.0.1    node      18421  elish4h
 5432    tcp    127.0.0.1    postgres  1932   postgres
-8080    tcp    0.0.0.0      java      9121   abhi
+8080    tcp    0.0.0.0      java      9121   elish4h
 
 ● 4 listening ports (2 user, 2 system)
 ```
 
-- **Current User Highlighted**: Dev processes owned by your user account are highlighted so you spot them instantly.
-- **System/Root Dimmed**: Background system services are visually muted.
-- **Dual-Stack Accuracy**: Shows IPv4 and IPv6 bindings explicitly.
+- Processes belonging to your user account are highlighted so your own servers stand out immediately.
+- System and root services are dimmed.
+- Dual-stack services show IPv4 and IPv6 bindings as separate rows to reflect actual kernel socket state.
 
-### Watch Mode (Interactive Split-Pane TUI)
+### Interactive split-pane watch mode
 
-Launch the interactive split-pane dashboard with live process inspection:
+To monitor ports live as servers start and stop, use watch mode:
 
 ```bash
 ports --watch
-# or watch a specific port
+# or shorthand
+ports -w
+```
+
+- **Split layout**: The left pane lists active ports; the right panel shows full metadata for the currently selected item.
+- **Navigation**: Move selection with `↑` / `↓` or Vim `j` / `k`.
+- **Mouse support**: Click any row on the left to inspect it immediately.
+- **In-TUI termination**: Press `x` or `d` to kill the selected process. It asks for confirmation (`[y/N]`) before sending `SIGTERM`.
+- **Refresh / Quit**: Press `r` to trigger a manual scan, or `q` / `Esc` to exit.
+
+You can also scope watch mode to a single port:
+
+```bash
 ports 3000 -w
 ```
 
-- **Split-Pane Layout**: Left panel lists all ports; right side panel displays full live details (Process, PID, User, CWD, Command, Uptime) for the selected item.
-- **Navigation**: Use `↑` / `↓` arrow keys or Vim `j` / `k` to move selection.
-- **Mouse Support**: Click any row with your mouse to inspect it immediately.
-- **In-TUI Safe Kill**: Press `x` or `d` to terminate the selected process with in-TUI confirmation (`[y/N]`).
-- **Refresh & Quit**: Press `r` to force refresh, `q` or `Esc` to exit cleanly.
+### Inspect a specific port
 
-### Inspect a Specific Port
-
-Accepts standard port numbers as well as the `:port` leading-colon alias:
+Pass the port number as an argument. A leading colon is accepted as an alias:
 
 ```bash
 ports 3000
@@ -115,49 +133,53 @@ ports :3000
 ```
 
 ```text
-● Port 3000 (TCP)
-  Interface:  127.0.0.1
-  Process:    node
-  PID:        18421
-  User:       abhi (current user)
-  CWD:        ~/projects/api
-  Command:    node server.js
-  Uptime:     12m 31s
+● Port 3000  [TCP]
+  Interface: 127.0.0.1 (localhost)
+  Process:   node
+  PID:       18421
+  User:      elish4h (current user)
+  CWD:       ~/projects/api
+  Command:   node server.js
+  Uptime:    14m 32s
 ```
 
-### Safely Kill a Port's Process
+If multiple processes or protocols bind the same port (for example, separate IPv4 and IPv6 listeners), each record is displayed.
+
+### Kill a process on a port
+
+To terminate whatever is holding a port:
 
 ```bash
 ports kill 3000
 ```
+
+`ports kill` resolves the owning PID, displays the command and working directory, and prompts for confirmation:
 
 ```text
 Port 3000 is used by:
 
   node
   PID:     18421
-  User:    abhi
-  CWD:     /home/abhi/projects/api
+  User:    elish4h
+  CWD:     /home/elish4h/projects/api
   Command: node server.js
 
 Kill PID 18421? [y/N]: y
 ✓ sent SIGTERM to PID 18421
 ```
 
-To skip interactive confirmation (e.g. in CI or trusted scripts):
+- Signals are sent directly via `syscall.Kill`. It never invokes shell commands like `kill -9 $(...)`.
+- The default signal is `SIGTERM` to allow clean process shutdown.
+- If multiple distinct processes own sockets on the port, `ports kill` refuses to guess and prints an error listing the PIDs.
+- To bypass interactive confirmation in scripts or CI:
 
 ```bash
 ports kill 3000 --force
 ```
 
-> [!NOTE]
-> `ports kill` always sends `SIGTERM` first, allowing processes to shut down gracefully and flush connections or write locks.
+### JSON output
 
----
-
-## 4. Machine-Readable JSON
-
-Pass `--json` to output strict JSON to `stdout`:
+Add `--json` to output machine-readable JSON to stdout:
 
 ```bash
 ports --json | jq .
@@ -172,40 +194,40 @@ ports --json | jq .
     "pid": 18421,
     "process": "node",
     "uid": 1000,
-    "user": "abhi",
-    "cwd": "/home/abhi/projects/api",
+    "user": "elish4h",
+    "cwd": "/home/elish4h/projects/api",
     "command": "node server.js",
-    "uptime_seconds": 751
+    "uptime_seconds": 872
   }
 ]
 ```
 
-Inspect a specific port as JSON:
+Inspect a single port as JSON:
 
 ```bash
 ports 3000 --json
 ```
 
-All diagnostic messages, hints, and logs are directed exclusively to `stderr`, keeping `stdout` pure and streamable into `jq`, `tq`, or shell pipelines.
+All warnings, hints, and errors go strictly to stderr, keeping stdout clean for piping into tools like `jq` or `tq`.
 
 ---
 
-## 5. Unix Composability
+## Unix composability
 
-`ports` automatically detects when its output is redirected or piped and strips all ANSI colors:
+When stdout is redirected or piped, all ANSI color codes and decorative characters are stripped automatically:
 
 ```bash
-# Filter processes
+# Filter plain output
 ports | grep node
 
 # Save table to a file
-ports > listening_ports.txt
+ports > active_ports.txt
 
-# Extract PIDs
-ports --json | jq '.[].pid'
+# Extract listening port numbers with jq
+ports --json | jq '.[].port'
 ```
 
-Honors the standard `NO_COLOR` environment variable:
+`ports` also respects the `NO_COLOR` environment variable:
 
 ```bash
 NO_COLOR=1 ports
@@ -213,38 +235,39 @@ NO_COLOR=1 ports
 
 ---
 
-## 6. Exit Codes
+## Exit codes
 
-`ports` provides deterministic, scriptable exit codes:
-
-| Exit Code | Meaning |
+| Code | Meaning |
 |---|---|
-| `0` | Successful execution (ports listed or requested port found) |
-| `1` | Operational error (process not found, kill failed, permission failure) |
-| `2` | Invalid command line syntax or out-of-range port number |
+| `0` | Success (listening ports found and listed, or requested port inspected) |
+| `1` | Operational error (port not in use, process not found, kill failed) |
+| `2` | Syntax error (invalid arguments or out-of-range port number) |
 
 ---
 
-## 7. Platform Requirement
+## Shell completion
 
-`ports` is designed Linux-first and communicates directly with Linux `/proc` (`/proc/net/*`, `/proc/<pid>/fd/*`, `/proc/<pid>/{comm,cmdline,cwd,status,stat}`).
-
-If executed on an unsupported operating system, `ports` exits cleanly with an informative message.
-
----
-
-## 8. Security & Safety
-
-- **OS-Level Signaling**: `ports kill` uses direct OS signal delivery (`syscall.Kill`) and never executes unvalidated shell commands like `kill -9 $(...)`.
-- **Multi-Process Ambiguity Guard**: If multiple distinct processes share a port (e.g. separate listeners), `ports kill` refuses to guess and aborts with an informative error.
-- **Graceful Unprivileged Mode**: When run without `sudo`, ports belonging to other system users still appear in discovery using the socket's kernel UID, marking inaccessible process metadata as `<permission denied>` without crashing.
-
----
-
-## 9. Development & Installation
+Completion scripts can be generated directly:
 
 ```bash
-# Build
+# Bash
+ports completion bash | sudo tee /etc/bash_completion.d/ports
+
+# Zsh
+ports completion zsh > ~/.zsh/completion/_ports
+
+# Fish
+ports completion fish > ~/.config/fish/completions/ports.fish
+```
+
+Running `make install` installs Fish and Zsh completions automatically if their user directories exist.
+
+---
+
+## Development
+
+```bash
+# Build binary
 make build
 
 # Run unit and integration tests
@@ -252,18 +275,12 @@ make test
 
 # Static analysis
 make lint
-
-# Install binary
-make install
-
-# Optional: grant zero-sudo inspection capabilities
-make setcap
 ```
+
+Integration tests spawn ephemeral TCP/UDP listeners on `127.0.0.1:0` to verify live `/proc` discovery, and spawn isolated child processes to test SIGTERM termination safety without affecting host services.
 
 ---
 
-## 10. Roadmap
+## License
 
-- [x] **v0.1**: Core `/proc` engine, listening TCP & bound UDP discovery, single port inspection, interactive safe kill, JSON output, shell completion, TTY styling.
-- [x] **v0.2 (In progress)**: Live `--watch` TUI mode (`ports --watch`), `make setcap` support.
-- [ ] Docker container port correlation (`ports --docker`), availability checks (`ports check <port>`), process-name filtering (`ports --process <name>`).
+[MIT](LICENSE)
