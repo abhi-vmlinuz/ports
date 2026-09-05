@@ -1,0 +1,8 @@
+# Binaries
+bin/
+ports
+
+# OS / Editor artifacts
+.DS_Store
+*.swp
+*~
