@@ -17,7 +17,13 @@ test:
 lint:
 	go vet ./...
 
-install: build
+completion: build
+	@mkdir -p $(HOME)/.config/fish/completions 2>/dev/null && \
+	$(BIN_DIR)/$(BINARY_NAME) completion fish > $(HOME)/.config/fish/completions/$(BINARY_NAME).fish 2>/dev/null || true
+	@mkdir -p $(HOME)/.zsh/completion 2>/dev/null && \
+	$(BIN_DIR)/$(BINARY_NAME) completion zsh > $(HOME)/.zsh/completion/_$(BINARY_NAME) 2>/dev/null || true
+
+install: build completion
 	install -m 755 $(BIN_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME) 2>/dev/null || \
 	install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(HOME)/.local/bin/$(BINARY_NAME)
 
