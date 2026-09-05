@@ -53,7 +53,7 @@ cd ports
 make install
 ```
 
-This builds the binary to `bin/ports`, installs it to `/usr/local/bin` (or `~/.local/bin`), and automatically registers shell completions for Fish and Zsh.
+This builds the binary to `bin/ports`, installs it to `/usr/bin`, and automatically registers shell completions for Fish and Zsh.
 
 You can also install directly with the Go toolchain:
 
@@ -69,7 +69,7 @@ Rather than running the binary under `sudo` or using dangerous `setuid root` per
 
 ```bash
 make setcap
-# runs: sudo setcap cap_sys_ptrace+ep /usr/local/bin/ports
+# runs: sudo setcap cap_sys_ptrace+ep /usr/bin/ports
 ```
 
 `CAP_SYS_PTRACE` allows reading `/proc/<pid>/fd/` symlinks across all users without granting network administration or write permissions.

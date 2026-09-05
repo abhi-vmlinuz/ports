@@ -23,13 +23,15 @@ completion: build
 	@mkdir -p $(HOME)/.zsh/completion 2>/dev/null && \
 	$(BIN_DIR)/$(BINARY_NAME) completion zsh > $(HOME)/.zsh/completion/_$(BINARY_NAME) 2>/dev/null || true
 
+PREFIX?=/usr
+BINDIR?=$(PREFIX)/bin
+
 install: build completion
-	install -m 755 $(BIN_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME) 2>/dev/null || \
-	install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(HOME)/.local/bin/$(BINARY_NAME)
+	sudo install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(BINDIR)/$(BINARY_NAME) 2>/dev/null || \
+	install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(BINDIR)/$(BINARY_NAME)
 
 setcap: install
-	sudo setcap cap_sys_ptrace+ep /usr/local/bin/$(BINARY_NAME) 2>/dev/null || \
-	sudo setcap cap_sys_ptrace+ep $(HOME)/.local/bin/$(BINARY_NAME)
+	sudo setcap cap_sys_ptrace+ep $(BINDIR)/$(BINARY_NAME)
 
 clean:
 	rm -rf $(BIN_DIR)
