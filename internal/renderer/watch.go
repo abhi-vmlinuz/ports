@@ -2,8 +2,11 @@ package renderer
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -17,7 +20,7 @@ import (
 )
 
 // WatchTUI runs an interactive, split-pane terminal dashboard with live navigation,
-// process inspection, mouse clicking, and safe process killing without screen flickering or wrapping.
+// process inspection, mouse clicking, popup action menus, clipboard export, and safe killing.
 func WatchTUI(filterPort uint16, interval time.Duration) error {
 	stdoutFd := int(os.Stdout.Fd())
 	stdinFd := int(os.Stdin.Fd())
@@ -61,7 +64,13 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 	var records []model.PortRecord
 	selectedIndex := 0
 	scrollOffset := 0
+
+	// Menu & Kill states
+	showActionMenu := false
+	menuSelection := 0
 	confirmingKill := false
+	killSignal := syscall.SIGTERM
+
 	statusMsg := ""
 	statusMsgTimer := time.Time{}
 
@@ -86,6 +95,24 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 	refreshData()
 
+	menuItems := []string{
+		"1. Kill process (SIGTERM)",
+		"2. Force kill (SIGKILL)",
+		"3. Copy JSON to clipboard",
+		"4. Copy PID",
+		"5. Copy Command",
+		"6. Copy Address (IP:Port)",
+	}
+
+	// Layout coordinates for mouse hit-testing
+	boxW := 50
+	boxH := len(menuItems) + 3
+	menuStartY := 5
+	menuStartX := 15
+	contentHeight := 15
+	splitWidth := 50
+	isSplit := true
+
 	draw := func() {
 		width, height, err := term.GetSize(stdoutFd)
 		if err != nil || width < 40 || height < 10 {
@@ -93,24 +120,22 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			height = 24
 		}
 
-		// Keep visible lines strictly within bounds to prevent auto-wrapping
 		maxW := width - 1
 		if maxW < 30 {
 			maxW = 30
 		}
 
-		// Content rows = total height minus (header, divider, table-header, divider, footer) = height - 5
-		contentHeight := height - 5
+		contentHeight = height - 5
 		if contentHeight < 2 {
 			contentHeight = 2
 		}
 
-		splitWidth := 50
+		splitWidth = 50
 		if width > 105 {
 			splitWidth = 54
 		}
 		rightWidth := maxW - splitWidth - 3
-		isSplit := width >= 80 && rightWidth >= 22
+		isSplit = width >= 80 && rightWidth >= 22
 
 		divider := strings.Repeat("─", maxW)
 		now := time.Now().Format("15:04:05")
@@ -244,7 +269,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			}
 		}
 
-		// 4. Render Content Rows (strictly contentHeight rows)
+		// 4. Render Content Rows
 		for row := 0; row < contentHeight; row++ {
 			recordIdx := scrollOffset + row
 			leftText := ""
@@ -313,7 +338,6 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				}
 			}
 
-			// Format row with right pane
 			leftVis := visibleLength(leftText)
 			pad := splitWidth - leftVis
 			if pad < 0 {
@@ -341,11 +365,15 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			buf.WriteString(divider + "\033[K\r\n")
 		}
 
-		// 6. Footer Status Bar (Final line: NO trailing \r\n to prevent terminal scroll!)
+		// 6. Footer Status Bar
 		if confirmingKill && len(records) > 0 && selectedIndex < len(records) {
 			target := records[selectedIndex]
-			prompt := fmt.Sprintf("⚠️  Kill '%s' (PID %d) on port %d?  Press 'y' to confirm, 'n' to cancel",
-				target.Process, target.PID, target.Port)
+			sigName := "SIGTERM"
+			if killSignal == syscall.SIGKILL {
+				sigName = "SIGKILL"
+			}
+			prompt := fmt.Sprintf("⚠️  Kill '%s' (PID %d) with %s?  Press 'y' to confirm, 'n' to cancel",
+				target.Process, target.PID, sigName)
 			if theme.Enabled {
 				buf.WriteString(truncateANSI(fmt.Sprintf("%s%s%s%s", theme.Bold, theme.Yellow, prompt, theme.Reset), maxW) + "\033[K")
 			} else {
@@ -357,8 +385,15 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			} else {
 				buf.WriteString(truncateANSI(statusMsg, maxW) + "\033[K")
 			}
+		} else if showActionMenu {
+			helpText := "[↑/↓/1-6] Choose Option  │  [Enter] Execute  │  [Esc/q] Close Menu"
+			if theme.Enabled {
+				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
+			} else {
+				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+			}
 		} else {
-			helpText := "[↑/↓/j/k] Navigate  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
+			helpText := "[↑/↓/j/k] Navigate  │  [Enter/Click] Menu  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
 			if theme.Enabled {
 				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
 			} else {
@@ -366,10 +401,171 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			}
 		}
 
+		// 7. Floating Action Menu Modal
+		if showActionMenu && len(records) > 0 && selectedIndex < len(records) {
+			target := records[selectedIndex]
+			boxW = 50
+			if boxW > maxW-2 {
+				boxW = maxW - 2
+			}
+			innerWidth := boxW - 4
+			if innerWidth < 20 {
+				innerWidth = 20
+			}
+			menuStartY = (height - boxH) / 2
+			if menuStartY < 2 {
+				menuStartY = 2
+			}
+			menuStartX = (width - boxW) / 2
+			if menuStartX < 1 {
+				menuStartX = 1
+			}
+
+			// Top border with title
+			titleStr := fmt.Sprintf(" Actions: :%d (%s) ", target.Port, target.Process)
+			titleLen := visibleLength(titleStr)
+			if titleLen > innerWidth {
+				titleStr = truncateANSI(titleStr, innerWidth)
+				titleLen = visibleLength(titleStr)
+			}
+			sideLen := (boxW - 2 - titleLen) / 2
+			if sideLen < 0 {
+				sideLen = 0
+			}
+			rightLen := boxW - 2 - sideLen - titleLen
+			if rightLen < 0 {
+				rightLen = 0
+			}
+			topBorder := "┌" + strings.Repeat("─", sideLen) + titleStr + strings.Repeat("─", rightLen) + "┐"
+			if theme.Enabled {
+				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s", menuStartY, menuStartX, theme.Bold+theme.BrightCyan, topBorder, theme.Reset)
+			} else {
+				fmt.Fprintf(&buf, "\033[%d;%dH%s", menuStartY, menuStartX, topBorder)
+			}
+
+			for i, item := range menuItems {
+				rowY := menuStartY + 1 + i
+				isItemSel := i == menuSelection
+				content := item
+				if i == 3 && target.PID > 0 {
+					content = fmt.Sprintf("4. Copy PID (%d)", target.PID)
+				}
+				avail := innerWidth - 2
+				if avail < 10 {
+					avail = 10
+				}
+				if visibleLength(content) > avail {
+					content = truncateANSI(content, avail)
+				}
+				pad := avail - visibleLength(content)
+				if pad < 0 {
+					pad = 0
+				}
+
+				var lineText string
+				if isItemSel {
+					if theme.Enabled {
+						lineText = fmt.Sprintf("%s▶ %s%s%s", theme.Bold+theme.BrightCyan, content, strings.Repeat(" ", pad), theme.Reset)
+					} else {
+						lineText = fmt.Sprintf("▶ %s%s", content, strings.Repeat(" ", pad))
+					}
+				} else {
+					lineText = fmt.Sprintf("  %s%s", content, strings.Repeat(" ", pad))
+				}
+
+				if theme.Enabled {
+					fmt.Fprintf(&buf, "\033[%d;%dH%s│%s %s %s│%s", rowY, menuStartX, theme.BrightCyan, theme.Reset, lineText, theme.BrightCyan, theme.Reset)
+				} else {
+					fmt.Fprintf(&buf, "\033[%d;%dH│ %s │", rowY, menuStartX, lineText)
+				}
+			}
+
+			// Hint row
+			hintY := menuStartY + 1 + len(menuItems)
+			hintText := "[1-6] Choose  │  [Esc] Close"
+			if visibleLength(hintText) > innerWidth {
+				hintText = truncateANSI(hintText, innerWidth)
+			}
+			hPad := innerWidth - visibleLength(hintText)
+			if hPad < 0 {
+				hPad = 0
+			}
+			if theme.Enabled {
+				fmt.Fprintf(&buf, "\033[%d;%dH%s│%s %s%s%s%s %s│%s", hintY, menuStartX, theme.BrightCyan, theme.Reset, theme.Dim, hintText, strings.Repeat(" ", hPad), theme.Reset, theme.BrightCyan, theme.Reset)
+			} else {
+				fmt.Fprintf(&buf, "\033[%d;%dH│ %s%s │", hintY, menuStartX, hintText, strings.Repeat(" ", hPad))
+			}
+
+			// Bottom border
+			botBorder := "└" + strings.Repeat("─", boxW-2) + "┘"
+			if theme.Enabled {
+				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s", menuStartY+boxH-1, menuStartX, theme.Bold+theme.BrightCyan, botBorder, theme.Reset)
+			} else {
+				fmt.Fprintf(&buf, "\033[%d;%dH%s", menuStartY+boxH-1, menuStartX, botBorder)
+			}
+		}
+
 		os.Stdout.Write(buf.Bytes())
 	}
 
 	draw()
+
+	// Action executor helper
+	executeAction := func(idx int) {
+		if selectedIndex < 0 || selectedIndex >= len(records) {
+			showActionMenu = false
+			draw()
+			return
+		}
+		target := records[selectedIndex]
+		showActionMenu = false
+
+		switch idx {
+		case 0, 1: // Kill SIGTERM or SIGKILL
+			if target.PID <= 0 {
+				statusMsg = "Cannot kill: PID is unavailable (permission denied or kernel socket)"
+				statusMsgTimer = time.Now().Add(3 * time.Second)
+				break
+			}
+			confirmingKill = true
+			if idx == 0 {
+				killSignal = syscall.SIGTERM
+			} else {
+				killSignal = syscall.SIGKILL
+			}
+		case 2: // Copy JSON
+			jsonBytes, err := json.MarshalIndent(target, "", "  ")
+			if err == nil {
+				_ = copyToClipboard(string(jsonBytes))
+				statusMsg = fmt.Sprintf("✓ Copied JSON for port %d to clipboard", target.Port)
+			} else {
+				statusMsg = fmt.Sprintf("Error generating JSON: %v", err)
+			}
+			statusMsgTimer = time.Now().Add(3 * time.Second)
+		case 3: // Copy PID
+			if target.PID > 0 {
+				_ = copyToClipboard(strconv.Itoa(target.PID))
+				statusMsg = fmt.Sprintf("✓ Copied PID %d to clipboard", target.PID)
+			} else {
+				statusMsg = "PID is unavailable (permission denied or kernel socket)"
+			}
+			statusMsgTimer = time.Now().Add(3 * time.Second)
+		case 4: // Copy Command
+			if target.Command != nil && *target.Command != "" {
+				_ = copyToClipboard(*target.Command)
+				statusMsg = fmt.Sprintf("✓ Copied command for '%s' to clipboard", target.Process)
+			} else {
+				statusMsg = "Command line is unavailable"
+			}
+			statusMsgTimer = time.Now().Add(3 * time.Second)
+		case 5: // Copy Address
+			addr := fmt.Sprintf("%s:%d", target.Address, target.Port)
+			_ = copyToClipboard(addr)
+			statusMsg = fmt.Sprintf("✓ Copied '%s' to clipboard", addr)
+			statusMsgTimer = time.Now().Add(3 * time.Second)
+		}
+		draw()
+	}
 
 	keyChan := make(chan []byte, 32)
 	go func() {
@@ -391,7 +587,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			return nil
 
 		case <-ticker.C:
-			if !confirmingKill {
+			if !confirmingKill && !showActionMenu {
 				refreshData()
 				draw()
 			}
@@ -401,19 +597,58 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				continue
 			}
 
-			// Mouse event: \x1b[<0;X;YM
+			// Mouse event: \x1b[<b;col;rowM
 			if len(input) >= 6 && input[0] == 0x1b && input[1] == '[' && input[2] == '<' {
 				str := string(input[3:])
 				if endIdx := strings.IndexAny(str, "Mm"); endIdx != -1 {
 					params := strings.Split(str[:endIdx], ";")
 					if len(params) == 3 && str[endIdx] == 'M' {
+						btn := params[0]
+						col, _ := strconv.Atoi(params[1])
 						row, _ := strconv.Atoi(params[2])
-						// Row 1: Header, Row 2: Divider, Row 3: Table Header. First content row is 4.
-						clickedRecord := scrollOffset + (row - 4)
-						if clickedRecord >= 0 && clickedRecord < len(records) {
-							selectedIndex = clickedRecord
+
+						if btn == "64" { // Mouse wheel up
+							if showActionMenu {
+								menuSelection = (menuSelection - 1 + len(menuItems)) % len(menuItems)
+							} else if selectedIndex > 0 {
+								selectedIndex--
+							}
 							draw()
 							continue
+						} else if btn == "65" { // Mouse wheel down
+							if showActionMenu {
+								menuSelection = (menuSelection + 1) % len(menuItems)
+							} else if selectedIndex < len(records)-1 {
+								selectedIndex++
+							}
+							draw()
+							continue
+						}
+
+						if showActionMenu {
+							// Check if click was on a popup menu item
+							if row >= menuStartY+1 && row <= menuStartY+len(menuItems) &&
+								col >= menuStartX && col <= menuStartX+boxW {
+								actionIdx := row - (menuStartY + 1)
+								executeAction(actionIdx)
+								continue
+							}
+							// Clicked outside popup menu: close it
+							showActionMenu = false
+							draw()
+							continue
+						}
+
+						// Main table click: select and open action menu
+						if !isSplit || col <= splitWidth {
+							clickedRecord := scrollOffset + (row - 4)
+							if row >= 4 && row < 4+contentHeight && clickedRecord >= 0 && clickedRecord < len(records) {
+								selectedIndex = clickedRecord
+								showActionMenu = true
+								menuSelection = 0
+								draw()
+								continue
+							}
 						}
 					}
 				}
@@ -423,13 +658,19 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			if len(input) >= 3 && input[0] == 0x1b && input[1] == '[' {
 				switch input[2] {
 				case 'A': // Up
-					if selectedIndex > 0 {
+					if showActionMenu {
+						menuSelection = (menuSelection - 1 + len(menuItems)) % len(menuItems)
+						draw()
+					} else if selectedIndex > 0 {
 						selectedIndex--
 						draw()
 					}
 					continue
 				case 'B': // Down
-					if selectedIndex < len(records)-1 {
+					if showActionMenu {
+						menuSelection = (menuSelection + 1) % len(menuItems)
+						draw()
+					} else if selectedIndex < len(records)-1 {
 						selectedIndex++
 						draw()
 					}
@@ -446,15 +687,20 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 			ch := input[0]
 
+			// Kill confirmation mode
 			if confirmingKill {
 				if ch == 'y' || ch == 'Y' {
 					if selectedIndex >= 0 && selectedIndex < len(records) {
 						target := records[selectedIndex]
 						if target.PID > 0 {
-							if err := syscall.Kill(target.PID, syscall.SIGTERM); err != nil {
+							if err := syscall.Kill(target.PID, killSignal); err != nil {
 								statusMsg = fmt.Sprintf("Error killing PID %d: %v", target.PID, err)
 							} else {
-								statusMsg = fmt.Sprintf("✓ Sent SIGTERM to '%s' (PID %d)", target.Process, target.PID)
+								sigName := "SIGTERM"
+								if killSignal == syscall.SIGKILL {
+									sigName = "SIGKILL"
+								}
+								statusMsg = fmt.Sprintf("✓ Sent %s to '%s' (PID %d)", sigName, target.Process, target.PID)
 							}
 						} else {
 							statusMsg = "Cannot kill process: PID is unavailable or permission denied"
@@ -473,9 +719,46 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				continue
 			}
 
+			// Action menu mode
+			if showActionMenu {
+				if ch == 'q' || ch == 'Q' || ch == 27 { // Esc or q: close menu
+					showActionMenu = false
+					draw()
+					continue
+				}
+				if ch >= '1' && ch <= '6' {
+					idx := int(ch - '1')
+					executeAction(idx)
+					continue
+				}
+				if ch == 13 || ch == 10 || ch == ' ' { // Enter or Space: execute selected
+					executeAction(menuSelection)
+					continue
+				}
+				if ch == 'k' || ch == 'K' {
+					menuSelection = (menuSelection - 1 + len(menuItems)) % len(menuItems)
+					draw()
+					continue
+				}
+				if ch == 'j' || ch == 'J' {
+					menuSelection = (menuSelection + 1) % len(menuItems)
+					draw()
+					continue
+				}
+				continue
+			}
+
+			// Normal mode
 			switch ch {
 			case 'q', 'Q', 3, 27:
 				return nil
+
+			case 13, 10, ' ', 'm', 'M', 'a', 'A': // Enter, Space, m, a: open action popup menu
+				if len(records) > 0 {
+					showActionMenu = true
+					menuSelection = 0
+					draw()
+				}
 
 			case 'k', 'K':
 				if selectedIndex > 0 {
@@ -489,9 +772,10 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					draw()
 				}
 
-			case 'x', 'X', 'd', 'D':
+			case 'x', 'X', 'd', 'D': // Direct kill hotkey
 				if len(records) > 0 && selectedIndex < len(records) {
 					confirmingKill = true
+					killSignal = syscall.SIGTERM
 					draw()
 				}
 
@@ -503,6 +787,33 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			}
 		}
 	}
+}
+
+// copyToClipboard writes text to the clipboard using OSC 52 and local utilities as fallback.
+func copyToClipboard(text string) error {
+	// 1. OSC 52 sequence (universal across modern terminal emulators)
+	b64 := base64.StdEncoding.EncodeToString([]byte(text))
+	fmt.Printf("\033]52;c;%s\007", b64)
+
+	// 2. Best-effort desktop clipboard fallback
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		if path, err := exec.LookPath("wl-copy"); err == nil {
+			cmd := exec.Command(path)
+			cmd.Stdin = strings.NewReader(text)
+			_ = cmd.Run()
+		}
+	} else if os.Getenv("DISPLAY") != "" {
+		if path, err := exec.LookPath("xclip"); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard")
+			cmd.Stdin = strings.NewReader(text)
+			_ = cmd.Run()
+		} else if path, err := exec.LookPath("xsel"); err == nil {
+			cmd := exec.Command(path, "--clipboard", "--input")
+			cmd.Stdin = strings.NewReader(text)
+			_ = cmd.Run()
+		}
+	}
+	return nil
 }
 
 func formatDetailField(theme *Theme, label, val string) string {

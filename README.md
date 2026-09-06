@@ -111,9 +111,16 @@ ports -w
 ```
 
 - **Split layout**: The left pane lists active ports; the right panel shows full metadata for the currently selected item.
-- **Navigation**: Move selection with `↑` / `↓` or Vim `j` / `k`.
-- **Mouse support**: Click any row on the left to inspect it immediately.
-- **In-TUI termination**: Press `x` or `d` to kill the selected process. It asks for confirmation (`[y/N]`) before sending `SIGTERM`.
+- **Navigation**: Move selection with `↑` / `↓` or Vim `j` / `k`. Mouse wheel scrolling is supported.
+- **Action popup modal**: Press `Enter`, `Space`, `m`, or click any port row to open the interactive action menu:
+  1. Kill process (`SIGTERM`)
+  2. Force kill (`SIGKILL`)
+  3. Copy JSON to clipboard
+  4. Copy PID
+  5. Copy Command line
+  6. Copy Address (`IP:Port`)
+- **Clipboard export**: Uses terminal OSC 52 sequences (works over SSH and local terminal emulators) with native `wl-copy`, `xclip`, and `xsel` fallbacks.
+- **Safe termination**: Quick kill with `x` or through the action menu, with confirmation prompt (`[y/N]`).
 - **Refresh / Quit**: Press `r` to trigger a manual scan, or `q` / `Esc` to exit.
 
 You can also scope watch mode to a single port:
