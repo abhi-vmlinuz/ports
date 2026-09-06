@@ -131,7 +131,9 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 		}
 
 		splitWidth = 50
-		if width > 105 {
+		if width >= 110 {
+			splitWidth = 56
+		} else if width > 100 {
 			splitWidth = 54
 		}
 		rightWidth := maxW - splitWidth - 3
@@ -639,16 +641,14 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 							continue
 						}
 
-						// Main table click: select and open action menu
-						if !isSplit || col <= splitWidth {
-							clickedRecord := scrollOffset + (row - 4)
-							if row >= 4 && row < 4+contentHeight && clickedRecord >= 0 && clickedRecord < len(records) {
-								selectedIndex = clickedRecord
-								showActionMenu = true
-								menuSelection = 0
-								draw()
-								continue
-							}
+						// Main row click: select and open action menu
+						clickedRecord := scrollOffset + (row - 4)
+						if row >= 4 && row < 4+contentHeight && clickedRecord >= 0 && clickedRecord < len(records) {
+							selectedIndex = clickedRecord
+							showActionMenu = true
+							menuSelection = 0
+							draw()
+							continue
 						}
 					}
 				}
@@ -689,6 +689,9 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 			// Kill confirmation mode
 			if confirmingKill {
+				if ch == 3 { // Ctrl+C
+					return nil
+				}
 				if ch == 'y' || ch == 'Y' {
 					if selectedIndex >= 0 && selectedIndex < len(records) {
 						target := records[selectedIndex]
@@ -721,6 +724,9 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 			// Action menu mode
 			if showActionMenu {
+				if ch == 3 { // Ctrl+C
+					return nil
+				}
 				if ch == 'q' || ch == 'Q' || ch == 27 { // Esc or q: close menu
 					showActionMenu = false
 					draw()
