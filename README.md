@@ -111,6 +111,12 @@ ports -w
 ```
 
 - **Split layout**: The left pane lists active ports; the right panel shows full metadata for the currently selected item.
+- **Live search bar (`/`)**: Press `/` or click the search box to search ports and processes. Filters in real time on **every keystroke** (like `fzf`):
+  - Numeric queries match port numbers (`80`, `:3000`).
+  - Text queries match process names with substring and fuzzy subsequence matching (`brave`, `brv`, `node`).
+  - Multi-token queries supported (`node 8080`, `tcp 53`).
+  - Matched characters are highlighted directly in the table.
+  - Press `Enter` or `↓` to focus the filtered table; press `Esc` to clear the filter.
 - **Navigation**: Move selection with `↑` / `↓` or Vim `j` / `k`. Mouse wheel scrolling is supported.
 - **Action popup modal**: Press `Enter`, `Space`, `m`, or click any port row to open the interactive action menu:
   1. Kill process (`SIGTERM`)

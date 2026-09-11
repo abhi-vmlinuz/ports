@@ -62,6 +62,10 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 	}
 
 	var records []model.PortRecord
+	var filteredRecords []model.PortRecord
+	searchQuery := ""
+	searchActive := false
+
 	selectedIndex := 0
 	scrollOffset := 0
 
@@ -74,6 +78,19 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 	statusMsg := ""
 	statusMsgTimer := time.Time{}
 
+	applyFilter := func() {
+		filteredRecords = FilterRecords(records, searchQuery)
+		if selectedIndex >= len(filteredRecords) {
+			selectedIndex = len(filteredRecords) - 1
+		}
+		if selectedIndex < 0 {
+			selectedIndex = 0
+		}
+		if selectedIndex < scrollOffset {
+			scrollOffset = selectedIndex
+		}
+	}
+
 	refreshData := func() {
 		var err error
 		if filterPort > 0 {
@@ -85,12 +102,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			statusMsg = fmt.Sprintf("Error: %v", err)
 			statusMsgTimer = time.Now().Add(3 * time.Second)
 		}
-		if selectedIndex >= len(records) {
-			selectedIndex = len(records) - 1
-		}
-		if selectedIndex < 0 {
-			selectedIndex = 0
-		}
+		applyFilter()
 	}
 
 	refreshData()
@@ -125,7 +137,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			maxW = 30
 		}
 
-		contentHeight = height - 5
+		// Non-content rows: Header (1) + Divider (1) + SearchBox (3) + TableHeader (1) + Divider (1) + Footer (1) = 8
+		contentHeight = height - 8
 		if contentHeight < 2 {
 			contentHeight = 2
 		}
@@ -168,6 +181,74 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			buf.WriteString(theme.Dim + divider + theme.Reset + "\033[K\r\n")
 		} else {
 			buf.WriteString(divider + "\033[K\r\n")
+		}
+
+		// 2.5 Search Bar Box (llmfit style)
+		searchBoxTitle := " Search [/] "
+		if searchActive {
+			searchBoxTitle = " Search [typing...] "
+		}
+		matchBadge := ""
+		if searchQuery != "" {
+			matchBadge = fmt.Sprintf(" (%d matches) ", len(filteredRecords))
+		}
+		tLen := visibleLength(searchBoxTitle)
+		mLen := visibleLength(matchBadge)
+		fillLen := maxW - 2 - tLen - mLen
+		if fillLen < 0 {
+			fillLen = 0
+		}
+		sbTop := "┌" + searchBoxTitle + strings.Repeat("─", fillLen) + matchBadge + "┐"
+		if theme.Enabled {
+			if searchActive {
+				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+sbTop+theme.Reset, maxW) + "\033[K\r\n")
+			} else {
+				buf.WriteString(truncateANSI(theme.Dim+sbTop+theme.Reset, maxW) + "\033[K\r\n")
+			}
+		} else {
+			buf.WriteString(truncateANSI(sbTop, maxW) + "\033[K\r\n")
+		}
+
+		var promptText string
+		if searchActive {
+			promptText = fmt.Sprintf("> %s█", searchQuery)
+		} else if searchQuery != "" {
+			promptText = fmt.Sprintf("> %s", searchQuery)
+		} else {
+			promptText = "Press / to search by port or process name..."
+		}
+		pVis := visibleLength(promptText)
+		pPad := maxW - 4 - pVis
+		if pPad < 0 {
+			pPad = 0
+		}
+		if theme.Enabled {
+			bColor := theme.Dim
+			if searchActive {
+				bColor = theme.BrightCyan
+			}
+			var pStyled string
+			if searchActive {
+				pStyled = theme.Bold + theme.BrightGreen + "> " + theme.Reset + theme.Bold + theme.BrightWhite + searchQuery + theme.BrightCyan + "█" + theme.Reset
+			} else if searchQuery != "" {
+				pStyled = theme.BrightCyan + "> " + theme.BrightWhite + searchQuery + theme.Reset
+			} else {
+				pStyled = theme.Dim + promptText + theme.Reset
+			}
+			buf.WriteString(fmt.Sprintf("%s│%s %s%s %s│%s\033[K\r\n", bColor, theme.Reset, pStyled, strings.Repeat(" ", pPad), bColor, theme.Reset))
+		} else {
+			buf.WriteString(fmt.Sprintf("│ %s%s │\033[K\r\n", promptText, strings.Repeat(" ", pPad)))
+		}
+
+		sbBot := "└" + strings.Repeat("─", maxW-2) + "┘"
+		if theme.Enabled {
+			if searchActive {
+				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+sbBot+theme.Reset, maxW) + "\033[K\r\n")
+			} else {
+				buf.WriteString(truncateANSI(theme.Dim+sbBot+theme.Reset, maxW) + "\033[K\r\n")
+			}
+		} else {
+			buf.WriteString(truncateANSI(sbBot, maxW) + "\033[K\r\n")
 		}
 
 		// 3. Table Header
@@ -222,8 +303,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 		// Prepare side panel detail lines for selected item
 		var detailLines []string
-		if len(records) > 0 && selectedIndex >= 0 && selectedIndex < len(records) {
-			sel := records[selectedIndex]
+		if len(filteredRecords) > 0 && selectedIndex >= 0 && selectedIndex < len(filteredRecords) {
+			sel := filteredRecords[selectedIndex]
 			protoUpper := strings.ToUpper(sel.Protocol)
 
 			if theme.Enabled {
@@ -276,8 +357,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			recordIdx := scrollOffset + row
 			leftText := ""
 
-			if recordIdx < len(records) {
-				r := records[recordIdx]
+			if recordIdx < len(filteredRecords) {
+				r := filteredRecords[recordIdx]
 				isSelected := recordIdx == selectedIndex
 
 				prefix := "  "
@@ -320,11 +401,23 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 							uColor = theme.BrightGreen
 						}
 
-						leftText = fmt.Sprintf("  %s%-*s%s %s%-*s%s %-*s %s%-*s%s %s%-*s%s",
-							theme.BrightCyan, colPort, portStr, theme.Reset,
+						portHighlighted := HighlightMatches(portStr, searchQuery, theme, theme.BrightCyan)
+						procHighlighted := HighlightMatches(procStr, searchQuery, theme, pColor)
+
+						portPad := colPort - visibleLength(portHighlighted)
+						if portPad < 0 {
+							portPad = 0
+						}
+						procPad := colProc - visibleLength(procHighlighted)
+						if procPad < 0 {
+							procPad = 0
+						}
+
+						leftText = fmt.Sprintf("  %s%s %s%-*s%s %-*s %s%s %s%-*s%s",
+							portHighlighted, strings.Repeat(" ", portPad),
 							theme.Gray, colProto, r.Protocol, theme.Reset,
 							colAddr, addrStr,
-							pColor, colProc, procStr, theme.Reset,
+							procHighlighted, strings.Repeat(" ", procPad),
 							uColor, colPID, pidStr, theme.Reset,
 						)
 					}
@@ -337,6 +430,20 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 						colProc, procStr,
 						colPID, pidStr,
 					)
+				}
+			} else if len(filteredRecords) == 0 && row == 0 {
+				if searchQuery != "" {
+					if theme.Enabled {
+						leftText = fmt.Sprintf("  %sNo matching ports or processes for '%s'%s", theme.Dim, searchQuery, theme.Reset)
+					} else {
+						leftText = fmt.Sprintf("  No matching ports or processes for '%s'", searchQuery)
+					}
+				} else {
+					if theme.Enabled {
+						leftText = fmt.Sprintf("  %sNo listening ports%s", theme.Dim, theme.Reset)
+					} else {
+						leftText = "  No listening ports"
+					}
 				}
 			}
 
@@ -368,8 +475,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 		}
 
 		// 6. Footer Status Bar
-		if confirmingKill && len(records) > 0 && selectedIndex < len(records) {
-			target := records[selectedIndex]
+		if confirmingKill && len(filteredRecords) > 0 && selectedIndex < len(filteredRecords) {
+			target := filteredRecords[selectedIndex]
 			sigName := "SIGTERM"
 			if killSignal == syscall.SIGKILL {
 				sigName = "SIGKILL"
@@ -394,8 +501,22 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			} else {
 				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
 			}
+		} else if searchActive {
+			helpText := "[Type] Live filter  │  [Enter/↓] Focus Table  │  [Ctrl+U] Clear  │  [Esc] Done"
+			if theme.Enabled {
+				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+helpText+theme.Reset, maxW) + "\033[K")
+			} else {
+				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+			}
+		} else if searchQuery != "" {
+			helpText := "[↑/↓/j/k] Navigate  │  [/] Search  │  [Esc] Clear Filter  │  [Enter/Click] Menu  │  [q] Quit"
+			if theme.Enabled {
+				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
+			} else {
+				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+			}
 		} else {
-			helpText := "[↑/↓/j/k] Navigate  │  [Enter/Click] Menu  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
+			helpText := "[↑/↓/j/k] Navigate  │  [/] Search  │  [Enter/Click] Menu  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
 			if theme.Enabled {
 				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
 			} else {
@@ -404,8 +525,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 		}
 
 		// 7. Floating Action Menu Modal
-		if showActionMenu && len(records) > 0 && selectedIndex < len(records) {
-			target := records[selectedIndex]
+		if showActionMenu && len(filteredRecords) > 0 && selectedIndex < len(filteredRecords) {
+			target := filteredRecords[selectedIndex]
 			boxW = 50
 			if boxW > maxW-2 {
 				boxW = maxW - 2
@@ -514,12 +635,12 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 	// Action executor helper
 	executeAction := func(idx int) {
-		if selectedIndex < 0 || selectedIndex >= len(records) {
+		if selectedIndex < 0 || selectedIndex >= len(filteredRecords) {
 			showActionMenu = false
 			draw()
 			return
 		}
-		target := records[selectedIndex]
+		target := filteredRecords[selectedIndex]
 		showActionMenu = false
 
 		switch idx {
@@ -612,6 +733,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 						if btn == "64" { // Mouse wheel up
 							if showActionMenu {
 								menuSelection = (menuSelection - 1 + len(menuItems)) % len(menuItems)
+							} else if searchActive {
+								// In search bar: keep
 							} else if selectedIndex > 0 {
 								selectedIndex--
 							}
@@ -620,7 +743,9 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 						} else if btn == "65" { // Mouse wheel down
 							if showActionMenu {
 								menuSelection = (menuSelection + 1) % len(menuItems)
-							} else if selectedIndex < len(records)-1 {
+							} else if searchActive {
+								// In search bar: keep
+							} else if selectedIndex < len(filteredRecords)-1 {
 								selectedIndex++
 							}
 							draw()
@@ -641,10 +766,18 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 							continue
 						}
 
-						// Main row click: select and open action menu
-						clickedRecord := scrollOffset + (row - 4)
-						if row >= 4 && row < 4+contentHeight && clickedRecord >= 0 && clickedRecord < len(records) {
+						// Click on search box (rows 3, 4, 5)
+						if row >= 3 && row <= 5 {
+							searchActive = true
+							draw()
+							continue
+						}
+
+						// Main row click: select, unfocus search, and open action menu
+						clickedRecord := scrollOffset + (row - 7)
+						if row >= 7 && row < 7+contentHeight && clickedRecord >= 0 && clickedRecord < len(filteredRecords) {
 							selectedIndex = clickedRecord
+							searchActive = false
 							showActionMenu = true
 							menuSelection = 0
 							draw()
@@ -661,8 +794,14 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					if showActionMenu {
 						menuSelection = (menuSelection - 1 + len(menuItems)) % len(menuItems)
 						draw()
+					} else if searchActive {
+						// In search bar: stay
 					} else if selectedIndex > 0 {
 						selectedIndex--
+						draw()
+					} else if selectedIndex == 0 {
+						// Up from row 0 enters search box
+						searchActive = true
 						draw()
 					}
 					continue
@@ -670,7 +809,14 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					if showActionMenu {
 						menuSelection = (menuSelection + 1) % len(menuItems)
 						draw()
-					} else if selectedIndex < len(records)-1 {
+					} else if searchActive {
+						// Down from search box enters table
+						searchActive = false
+						if len(filteredRecords) > 0 && selectedIndex < 0 {
+							selectedIndex = 0
+						}
+						draw()
+					} else if selectedIndex < len(filteredRecords)-1 {
 						selectedIndex++
 						draw()
 					}
@@ -693,8 +839,8 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					return nil
 				}
 				if ch == 'y' || ch == 'Y' {
-					if selectedIndex >= 0 && selectedIndex < len(records) {
-						target := records[selectedIndex]
+					if selectedIndex >= 0 && selectedIndex < len(filteredRecords) {
+						target := filteredRecords[selectedIndex]
 						if target.PID > 0 {
 							if err := syscall.Kill(target.PID, killSignal); err != nil {
 								statusMsg = fmt.Sprintf("Error killing PID %d: %v", target.PID, err)
@@ -754,13 +900,70 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				continue
 			}
 
+			// Search bar mode: live fzf-style filtering on every key
+			if searchActive {
+				if ch == 3 { // Ctrl+C
+					return nil
+				}
+				if ch == 27 { // Esc
+					if searchQuery != "" {
+						searchQuery = ""
+						applyFilter()
+					}
+					searchActive = false
+					draw()
+					continue
+				}
+				if ch == 13 || ch == 10 { // Enter: finish typing, focus table
+					searchActive = false
+					draw()
+					continue
+				}
+				if ch == 0x7f || ch == 8 { // Backspace
+					if len(searchQuery) > 0 {
+						runes := []rune(searchQuery)
+						searchQuery = string(runes[:len(runes)-1])
+						applyFilter()
+						draw()
+					}
+					continue
+				}
+				if ch == 21 || ch == 23 { // Ctrl+U or Ctrl+W: clear search
+					searchQuery = ""
+					applyFilter()
+					draw()
+					continue
+				}
+				if ch >= 32 && ch <= 126 { // Printable character: live filter!
+					searchQuery += string(ch)
+					applyFilter()
+					draw()
+					continue
+				}
+				continue
+			}
+
 			// Normal mode
 			switch ch {
-			case 'q', 'Q', 3, 27:
+			case 'q', 'Q', 3:
 				return nil
 
+			case 27: // Esc: clear search filter if active, or exit
+				if searchQuery != "" {
+					searchQuery = ""
+					applyFilter()
+					draw()
+					continue
+				}
+				return nil
+
+			case '/': // Enter search mode
+				searchActive = true
+				draw()
+				continue
+
 			case 13, 10, ' ', 'm', 'M', 'a', 'A': // Enter, Space, m, a: open action popup menu
-				if len(records) > 0 {
+				if len(filteredRecords) > 0 {
 					showActionMenu = true
 					menuSelection = 0
 					draw()
@@ -770,18 +973,27 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				if selectedIndex > 0 {
 					selectedIndex--
 					draw()
+				} else if selectedIndex == 0 {
+					searchActive = true
+					draw()
 				}
 
 			case 'j', 'J':
-				if selectedIndex < len(records)-1 {
+				if selectedIndex < len(filteredRecords)-1 {
 					selectedIndex++
 					draw()
 				}
 
 			case 'x', 'X', 'd', 'D': // Direct kill hotkey
-				if len(records) > 0 && selectedIndex < len(records) {
-					confirmingKill = true
-					killSignal = syscall.SIGTERM
+				if len(filteredRecords) > 0 && selectedIndex < len(filteredRecords) {
+					target := filteredRecords[selectedIndex]
+					if target.PID <= 0 {
+						statusMsg = "Cannot kill: PID is unavailable (permission denied or kernel socket)"
+						statusMsgTimer = time.Now().Add(3 * time.Second)
+					} else {
+						confirmingKill = true
+						killSignal = syscall.SIGTERM
+					}
 					draw()
 				}
 

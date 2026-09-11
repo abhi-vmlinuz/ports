@@ -15,8 +15,9 @@ type Theme struct {
 	BrightCyan  string
 	Green       string
 	BrightGreen string
-	Yellow      string
-	Red         string
+	Yellow        string
+	BrightYellow  string
+	Red           string
 	BrightWhite string
 	Gray        string
 	Blue        string
@@ -39,10 +40,11 @@ func NewTheme(forceDisable bool) *Theme {
 		Italic:      "\033[3m",
 		Cyan:        "\033[36m",
 		BrightCyan:  "\033[96m",
-		Green:       "\033[32m",
-		BrightGreen: "\033[92m",
-		Yellow:      "\033[33m",
-		Red:         "\033[31m",
+		Green:         "\033[32m",
+		BrightGreen:   "\033[92m",
+		Yellow:        "\033[33m",
+		BrightYellow:  "\033[93m",
+		Red:           "\033[31m",
 		BrightWhite:   "\033[97m",
 		Gray:          "\033[90m",
 		Blue:          "\033[34m",
