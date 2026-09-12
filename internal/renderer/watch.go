@@ -186,7 +186,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 		// 2.5 Search Bar Box (llmfit style)
 		searchBoxTitle := " Search [/] "
 		if searchActive {
-			searchBoxTitle = " Search [typing...] "
+			searchBoxTitle = " Search "
 		}
 		matchBadge := ""
 		if searchQuery != "" {
