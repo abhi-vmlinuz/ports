@@ -45,7 +45,7 @@ When a local port conflict happens during development, the typical fix involves 
 
 ## Installation
 
-### From source (Go 1.22+)
+### From source (Go 1.21+)
 
 ```bash
 git clone https://github.com/abhi-vmlinuz/ports.git
@@ -53,7 +53,7 @@ cd ports
 make install
 ```
 
-This builds the binary to `bin/ports`, installs it to `/usr/bin`, and automatically registers shell completions for Fish and Zsh.
+This builds the binary to `bin/ports`, installs it to `/usr/bin`, and automatically registers shell completions for Bash, Fish, and Zsh.
 
 You can also install directly with the Go toolchain:
 
