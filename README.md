@@ -1,6 +1,16 @@
 # ports
 
-`ports` is a small Linux CLI written in Go that answers one question: **what is listening on this port, and what process owns it?**
+<p align="center">
+  <strong>Fast Linux CLI and live TUI that answers: what is listening on this port, and what process owns it?</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/abhi-vmlinuz/ports/releases"><img src="https://img.shields.io/github/v/release/abhi-vmlinuz/ports?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go" alt="Go Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
+</p>
+
+---
 
 Instead of remembering and chaining tools:
 
@@ -151,6 +161,7 @@ ports :3000
   Interface: 127.0.0.1 (localhost)
   Process:   node
   PID:       18421
+  Origin:    interactive
   User:      elish4h (current user)
   CWD:       ~/projects/api
   Command:   node server.js
@@ -207,6 +218,7 @@ ports --json | jq .
     "address": "127.0.0.1",
     "pid": 18421,
     "process": "node",
+    "origin": "interactive",
     "uid": 1000,
     "user": "elish4h",
     "cwd": "/home/elish4h/projects/api",
@@ -274,7 +286,7 @@ ports completion zsh > ~/.zsh/completion/_ports
 ports completion fish > ~/.config/fish/completions/ports.fish
 ```
 
-Running `make install` installs Fish and Zsh completions automatically if their user directories exist.
+Running `make install` or `sudo make install` installs system-wide completions to `/usr/share/bash-completion/completions/ports`, `/usr/share/zsh/site-functions/_ports`, and `/usr/share/fish/vendor_completions.d/ports.fish` automatically.
 
 ---
 

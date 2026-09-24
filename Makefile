@@ -1,6 +1,6 @@
 BINARY_NAME=ports
 BIN_DIR=bin
-VERSION?=0.1.0
+VERSION?=0.1.1
 LDFLAGS=-ldflags "-X main.version=$(VERSION)"
 
 .PHONY: all build test lint install clean
