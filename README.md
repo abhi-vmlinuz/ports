@@ -21,6 +21,7 @@ ports 3000
   Interface: 127.0.0.1 (localhost)
   Process:   node
   PID:       18421
+  Origin:    interactive
   User:      elish4h (current user)
   CWD:       ~/projects/api
   Command:   node server.js
@@ -39,7 +40,7 @@ ports kill 3000
 
 When a local port conflict happens during development, the typical fix involves running `lsof` or `ss`, copying a PID, inspecting `ps` to make sure it's the right process, and then killing it. If you aren't running as root, `lsof` often prints nothing at all without explaining why.
 
-`ports` directly parses the Linux kernel's socket tables in `/proc/net/` and maps socket inodes back to processes via `/proc/<pid>/fd/`. It doesn't shell out to external binaries, requires no background daemon or configuration, and handles unprivileged permissions cleanly by showing socket owners even when individual process details require elevation.
+`ports` directly parses the Linux kernel's socket tables in `/proc/net/` and maps socket inodes back to processes via `/proc/<pid>/fd/`. It inspects `/proc/<pid>/cgroup` to pinpoint the process origin (Docker container, systemd service, or interactive shell), doesn't shell out to external binaries, requires no background daemon or configuration, and handles unprivileged permissions cleanly by showing socket owners even when individual process details require elevation.
 
 ---
 

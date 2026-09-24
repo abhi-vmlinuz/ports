@@ -8,6 +8,7 @@ type PortRecord struct {
 	Address       string  `json:"address"`
 	PID           int     `json:"pid"`
 	Process       string  `json:"process"`
+	Origin        *string `json:"origin,omitempty"`
 	UID           *int    `json:"uid"`
 	User          *string `json:"user"`
 	CWD           *string `json:"cwd"`
@@ -31,6 +32,7 @@ type ProcessInfo struct {
 	Name          string
 	Cmdline       string
 	CWD           string
+	Origin        string
 	UID           int
 	User          string
 	UptimeSeconds int64

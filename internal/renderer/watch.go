@@ -333,6 +333,10 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				detailLines = append(detailLines, formatDetailField(theme, "UID", strconv.Itoa(*sel.UID)))
 			}
 
+			if sel.Origin != nil && *sel.Origin != "" {
+				detailLines = append(detailLines, formatDetailField(theme, "Origin", *sel.Origin))
+			}
+
 			detailLines = append(detailLines, formatDetailField(theme, "Interface", sel.Address))
 
 			if sel.CWD != nil && *sel.CWD != "" {
@@ -546,6 +550,9 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 			// Top border with title
 			titleStr := fmt.Sprintf(" Actions: :%d (%s) ", target.Port, target.Process)
+			if target.Origin != nil && *target.Origin != "" {
+				titleStr = fmt.Sprintf(" Actions: :%d (%s • %s) ", target.Port, target.Process, *target.Origin)
+			}
 			titleLen := visibleLength(titleStr)
 			if titleLen > innerWidth {
 				titleStr = truncateANSI(titleStr, innerWidth)

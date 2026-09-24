@@ -85,6 +85,10 @@ func (d *Discoverer) DiscoverAll() ([]model.PortRecord, error) {
 				up := pInfo.UptimeSeconds
 				record.UptimeSeconds = &up
 			}
+			if pInfo.Origin != "" {
+				orig := pInfo.Origin
+				record.Origin = &orig
+			}
 		} else {
 			// PID could not be mapped
 			sockUID := s.SocketUID

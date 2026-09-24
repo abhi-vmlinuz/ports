@@ -120,6 +120,9 @@ func (ps *ProcessScanner) readProcess(pid int) *model.ProcessInfo {
 		}
 	}
 
+	// 6. Process Origin (Lifecycle Controller via /proc/<pid>/cgroup)
+	info.Origin = DetectOrigin(ps.procPath, pid)
+
 	return info
 }
 

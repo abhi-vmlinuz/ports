@@ -9,12 +9,15 @@ import (
 func TestFilterRecords(t *testing.T) {
 	u1 := "elish4h"
 	u2 := "root"
+	o1 := "docker (3b3b6fe5f770)"
+	o2 := "systemd (sshd.service)"
+	o3 := "interactive"
 	sample := []model.PortRecord{
-		{Port: 22, Protocol: "tcp", Address: "0.0.0.0", Process: "sshd", PID: 812, User: &u2},
+		{Port: 22, Protocol: "tcp", Address: "0.0.0.0", Process: "sshd", PID: 812, User: &u2, Origin: &o2},
 		{Port: 80, Protocol: "tcp", Address: "0.0.0.0", Process: "nginx", PID: 1200, User: &u2},
-		{Port: 5353, Protocol: "udp", Address: "224.0.0.251", Process: "brave", PID: 15272, User: &u1},
-		{Port: 8080, Protocol: "tcp", Address: "127.0.0.1", Process: "node", PID: 9121, User: &u1},
-		{Port: 5432, Protocol: "tcp", Address: "127.0.0.1", Process: "postgres", PID: 1932, User: &u2},
+		{Port: 5353, Protocol: "udp", Address: "224.0.0.251", Process: "brave", PID: 15272, User: &u1, Origin: &o3},
+		{Port: 8080, Protocol: "tcp", Address: "127.0.0.1", Process: "node", PID: 9121, User: &u1, Origin: &o3},
+		{Port: 5432, Protocol: "tcp", Address: "127.0.0.1", Process: "postgres", PID: 1932, User: &u2, Origin: &o1},
 	}
 
 	tests := []struct {
@@ -76,6 +79,26 @@ func TestFilterRecords(t *testing.T) {
 			name:      "Filter by user",
 			query:     "elish4h",
 			wantPorts: []uint16{5353, 8080},
+		},
+		{
+			name:      "Filter by origin docker",
+			query:     "docker",
+			wantPorts: []uint16{5432},
+		},
+		{
+			name:      "Filter by origin systemd",
+			query:     "systemd",
+			wantPorts: []uint16{22},
+		},
+		{
+			name:      "Filter by origin interactive",
+			query:     "interactive",
+			wantPorts: []uint16{5353, 8080},
+		},
+		{
+			name:      "Multi-token origin and port",
+			query:     "docker 5432",
+			wantPorts: []uint16{5432},
 		},
 		{
 			name:      "Non-matching query",

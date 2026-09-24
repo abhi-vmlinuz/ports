@@ -122,6 +122,15 @@ func (cr *CardRenderer) Render(w io.Writer, records []model.PortRecord) error {
 		}
 		cr.printField(w, "PID", pidVal)
 
+		// Origin
+		if r.Origin != nil && *r.Origin != "" {
+			origVal := *r.Origin
+			if th.Enabled {
+				origVal = fmt.Sprintf("%s%s%s", th.BrightMagenta, origVal, th.Reset)
+			}
+			cr.printField(w, "Origin", origVal)
+		}
+
 		// User
 		if r.User != nil && *r.User != "" {
 			usrRaw := *r.User

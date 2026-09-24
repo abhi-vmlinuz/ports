@@ -43,6 +43,10 @@ func recordMatches(r model.PortRecord, tokens []string) bool {
 	if r.User != nil {
 		userLower = strings.ToLower(*r.User)
 	}
+	origLower := ""
+	if r.Origin != nil {
+		origLower = strings.ToLower(*r.Origin)
+	}
 
 	for _, token := range tokens {
 		cleanToken := strings.TrimPrefix(token, ":")
@@ -57,7 +61,7 @@ func recordMatches(r model.PortRecord, tokens []string) bool {
 				matched = true
 			}
 		} else {
-			// Text token: match process name (substring or fuzzy), protocol, or user
+			// Text token: match process name (substring or fuzzy), protocol, user, or origin
 			if strings.Contains(procLower, token) {
 				matched = true
 			} else if isSubsequence(token, procLower) {
@@ -65,6 +69,8 @@ func recordMatches(r model.PortRecord, tokens []string) bool {
 			} else if strings.EqualFold(protoLower, token) || strings.HasPrefix(protoLower, token) {
 				matched = true
 			} else if userLower != "" && (strings.Contains(userLower, token) || isSubsequence(token, userLower)) {
+				matched = true
+			} else if origLower != "" && (strings.Contains(origLower, token) || isSubsequence(token, origLower)) {
 				matched = true
 			}
 		}
