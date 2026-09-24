@@ -43,11 +43,17 @@ install: build
 	fi
 	@if [ -n "$$SUDO_USER" ]; then \
 		UHOME=$$(getent passwd "$$SUDO_USER" 2>/dev/null | cut -d: -f6); \
+		if [ -n "$$UHOME" ] && [ -f "$$UHOME/.local/bin/$(BINARY_NAME)" ]; then \
+			rm -f "$$UHOME/.local/bin/$(BINARY_NAME)" 2>/dev/null || true; \
+		fi; \
 		if [ -n "$$UHOME" ] && [ -d "$$UHOME" ]; then \
 			mkdir -p "$$UHOME/.config/fish/completions" 2>/dev/null && $(BIN_DIR)/$(BINARY_NAME) completion fish > "$$UHOME/.config/fish/completions/$(BINARY_NAME).fish" 2>/dev/null || true; \
 			mkdir -p "$$UHOME/.zsh/completion" 2>/dev/null && $(BIN_DIR)/$(BINARY_NAME) completion zsh > "$$UHOME/.zsh/completion/_$(BINARY_NAME)" 2>/dev/null || true; \
 			chown -R "$$SUDO_USER:" "$$UHOME/.config/fish/completions/$(BINARY_NAME).fish" "$$UHOME/.zsh/completion/_$(BINARY_NAME)" 2>/dev/null || true; \
 		fi \
+	fi
+	@if [ -f "$$HOME/.local/bin/$(BINARY_NAME)" ]; then \
+		rm -f "$$HOME/.local/bin/$(BINARY_NAME)" 2>/dev/null || true; \
 	fi
 
 setcap: install
