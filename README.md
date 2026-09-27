@@ -89,12 +89,48 @@ make setcap
 
 ## Usage
 
-### List listening ports
+### Interactive split-pane dashboard (default)
 
-Running `ports` with no arguments prints a sorted table of all active TCP listeners and locally bound UDP endpoints:
+Running `ports` (or `sudo ports`) in an interactive terminal opens the live split-pane TUI dashboard:
 
 ```bash
 ports
+```
+
+- **Split layout**: The left pane lists active ports with protocol, bind address, process name, and PID. The right pane shows comprehensive metadata (origin controller, user, CWD, full command line, and uptime) for the selected process.
+- **Theme support (`t`)**: Press `t` to cycle through 16 built-in TrueColor themes in real time. Each styled theme paints the entire terminal window with solid 24-bit background colors matching `rinode` (Cyberpunk, Catppuccin, Gruvbox, etc.), while `default` preserves transparent terminal wallpapers. Your choice is automatically persisted to `~/.config/ports/config.json` (and cleanly saved to `$SUDO_USER`'s home directory when running under `sudo`).
+- **Live search bar (`/`)**: Press `/` or click the search box to search ports and processes. Filters in real time on **every keystroke** (like `fzf`):
+  - Numeric queries match port numbers (`80`, `:3000`).
+  - Text queries match process names with substring and fuzzy subsequence matching (`brave`, `brv`, `node`).
+  - Multi-token queries supported (`node 8080`, `tcp 53`, `docker 3000`).
+  - Matched characters are highlighted directly in the table.
+  - Press `Enter` or `↓` to focus the filtered table; press `Esc` to clear the filter.
+- **Navigation & Scrolling**: Move selection with `↑` / `↓` or Vim `j` / `k`. Scroll smoothly through long lists with mouse wheel, `PageUp` / `PageDown` (`Ctrl+D` / `Ctrl+U`), and jump directly to top or bottom with `Home` / `End` (`g` / `G`). The TUI dynamically handles window resize (`SIGWINCH`), seamlessly adapting column widths, toggling split layout on narrow windows, and clamping scroll offsets to prevent blank spaces.
+- **Action popup modal**: Press `Enter`, `Space`, `m`, or click any port row to open the interactive action menu:
+  1. Kill process (`SIGTERM`)
+  2. Force kill (`SIGKILL`)
+  3. Copy JSON to clipboard
+  4. Copy PID
+  5. Copy Command line
+  6. Copy Address (`IP:Port`)
+- **Clipboard export**: Uses terminal OSC 52 sequences (works over SSH and local terminal emulators) with native `wl-copy`, `xclip`, and `xsel` fallbacks.
+- **Safe termination**: Quick kill with `x` or through the action menu, with confirmation prompt (`[y/N]`).
+- **Refresh / Quit**: Press `r` to trigger a manual scan, or `q` / `Esc` to exit.
+
+You can also scope the dashboard to a single port:
+
+```bash
+ports 3000 -w
+```
+
+### Static snapshot table
+
+To print a one-off snapshot table directly to stdout without launching the interactive TUI, use `-s` or `--snapshot`:
+
+```bash
+ports -s
+# or
+ports --snapshot
 ```
 
 ```text
@@ -107,44 +143,26 @@ PORT    PROTO  ADDRESS      PROCESS   PID    USER
 ● 4 listening ports (2 user, 2 system)
 ```
 
+- When stdout is piped or redirected (`ports | grep node`, `ports > listening.txt`), `ports` automatically outputs the snapshot table without needing `-s`.
 - Processes belonging to your user account are highlighted so your own servers stand out immediately.
 - System and root services are dimmed.
-- Dual-stack services show IPv4 and IPv6 bindings as separate rows to reflect actual kernel socket state.
 
-### Interactive split-pane watch mode
+### Themes
 
-To monitor ports live as servers start and stop, use watch mode:
-
-```bash
-ports --watch
-# or shorthand
-ports -w
-```
-
-- **Split layout**: The left pane lists active ports; the right panel shows full metadata for the currently selected item.
-- **Live search bar (`/`)**: Press `/` or click the search box to search ports and processes. Filters in real time on **every keystroke** (like `fzf`):
-  - Numeric queries match port numbers (`80`, `:3000`).
-  - Text queries match process names with substring and fuzzy subsequence matching (`brave`, `brv`, `node`).
-  - Multi-token queries supported (`node 8080`, `tcp 53`).
-  - Matched characters are highlighted directly in the table.
-  - Press `Enter` or `↓` to focus the filtered table; press `Esc` to clear the filter.
-- **Navigation**: Move selection with `↑` / `↓` or Vim `j` / `k`. Mouse wheel scrolling is supported.
-- **Action popup modal**: Press `Enter`, `Space`, `m`, or click any port row to open the interactive action menu:
-  1. Kill process (`SIGTERM`)
-  2. Force kill (`SIGKILL`)
-  3. Copy JSON to clipboard
-  4. Copy PID
-  5. Copy Command line
-  6. Copy Address (`IP:Port`)
-- **Clipboard export**: Uses terminal OSC 52 sequences (works over SSH and local terminal emulators) with native `wl-copy`, `xclip`, and `xsel` fallbacks.
-- **Safe termination**: Quick kill with `x` or through the action menu, with confirmation prompt (`[y/N]`).
-- **Refresh / Quit**: Press `r` to trigger a manual scan, or `q` / `Esc` to exit.
-
-You can also scope watch mode to a single port:
+`ports` includes 16 TrueColor palettes:
 
 ```bash
-ports 3000 -w
+# List available themes with color previews
+ports --theme list
+
+# Run with a specific theme
+ports --theme catppuccin
+ports -t dracula -s
 ```
+
+Available palettes: `default`, `catppuccin`, `nord`, `dracula`, `gruvbox`, `tokyo_night`, `rose_pine`, `one_dark`, `monokai`, `kanagawa`, `cyberpunk`, `everforest`, `ayu`, `synthwave`, `solarized`, and `matrix`.
+
+Inside the TUI, press `t` to cycle through them. Your selected theme is remembered across sessions.
 
 ### Inspect a specific port
 

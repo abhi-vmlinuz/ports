@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"ports/internal/config"
 	"ports/internal/model"
 	"ports/internal/proc"
 
@@ -21,7 +22,7 @@ import (
 
 // WatchTUI runs an interactive, split-pane terminal dashboard with live navigation,
 // process inspection, mouse clicking, popup action menus, clipboard export, and safe killing.
-func WatchTUI(filterPort uint16, interval time.Duration) error {
+func WatchTUI(filterPort uint16, interval time.Duration, themeID ...string) error {
 	stdoutFd := int(os.Stdout.Fd())
 	stdinFd := int(os.Stdin.Fd())
 
@@ -35,12 +36,28 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 	}
 	defer term.Restore(stdinFd, oldState)
 
-	// Enter alternate screen, hide cursor, enable SGR mouse tracking
-	fmt.Print("\033[?1049h\033[?25l\033[?1000h\033[?1006h")
-	defer fmt.Print("\033[?1000l\033[?1006l\033[?25h\033[?1049l")
+	discoverer := proc.NewDiscoverer("/proc")
+
+	var initialTheme string
+	if len(themeID) > 0 && themeID[0] != "" {
+		initialTheme = themeID[0]
+	} else {
+		cfg := config.Load()
+		initialTheme = cfg.Theme
+	}
+	currentThemeDef := FindTheme(initialTheme)
+	theme := currentThemeDef.BuildTheme(true)
+
+	// Enter alternate screen, apply theme background, clear screen, hide cursor, enable SGR mouse tracking
+	if theme.BgEscape != "" {
+		fmt.Printf("\033[?1049h%s\033[2J\033[H\033[?25l\033[?1000h\033[?1006h", theme.BgEscape)
+	} else {
+		fmt.Printf("\033[?1049h\033[49m\033[2J\033[H\033[?25l\033[?1000h\033[?1006h")
+	}
+	defer fmt.Print("\033[?1000l\033[?1006l\033[0m\033[49m\033[2J\033[?25h\033[?1049l")
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGWINCH)
 	defer signal.Stop(sigChan)
 
 	if interval <= 0 {
@@ -48,9 +65,6 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
-	discoverer := proc.NewDiscoverer("/proc")
-	theme := NewTheme(false)
 
 	currentUser := os.Getenv("SUDO_USER")
 	homeDir := ""
@@ -132,10 +146,13 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			height = 24
 		}
 
-		maxW := width - 1
-		if maxW < 30 {
-			maxW = 30
+		userCount := 0
+		for _, r := range records {
+			if r.User != nil && *r.User == currentUser {
+				userCount++
+			}
 		}
+		systemCount := len(records) - userCount
 
 		// Non-content rows: Header (1) + Divider (1) + SearchBox (3) + TableHeader (1) + Divider (1) + Footer (1) = 8
 		contentHeight = height - 8
@@ -143,47 +160,97 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			contentHeight = 2
 		}
 
-		splitWidth = 50
-		if width >= 110 {
-			splitWidth = 56
-		} else if width > 100 {
-			splitWidth = 54
+		splitWidth = width * 54 / 100
+		if splitWidth < 46 {
+			splitWidth = 46
 		}
-		rightWidth := maxW - splitWidth - 3
+		rightWidth := width - splitWidth - 3
 		isSplit = width >= 80 && rightWidth >= 22
 
-		divider := strings.Repeat("─", maxW)
+		if !isSplit {
+			splitWidth = width
+			rightWidth = 0
+		}
+
+		// Responsive columns adapting to available splitWidth
+		colPort := 7
+		colProto := 6
+		colPID := 7
+		rem := splitWidth - (colPort + colProto + colPID + 4)
+		if rem < 20 {
+			rem = 20
+		}
+		colAddr := rem * 44 / 100
+		if colAddr < 15 {
+			colAddr = 15
+		}
+		colProc := rem - colAddr
+		if colProc < 12 {
+			colProc = 12
+		}
+
+		divider := strings.Repeat("─", width)
 		now := time.Now().Format("15:04:05")
 
 		var buf bytes.Buffer
 		buf.WriteString("\033[H") // Reset cursor to (1,1)
 
-		// 1. Header Bar
+		currentLine := 0
+		writeRow := func(content string) {
+			if currentLine >= height {
+				return
+			}
+			vis := visibleLength(content)
+			pad := width - vis
+			var lineStr string
+			if pad < 0 {
+				lineStr = truncateANSI(content, width, theme.Reset)
+			} else {
+				lineStr = content + strings.Repeat(" ", pad)
+			}
+
+			if theme.BgEscape != "" {
+				buf.WriteString(theme.BgEscape)
+			}
+			buf.WriteString(lineStr)
+			buf.WriteString("\033[K")
+			if theme.BgEscape != "" {
+				buf.WriteString(theme.BgReset)
+			}
+			if currentLine < height-1 {
+				buf.WriteString("\r\n")
+			}
+			currentLine++
+		}
+
+		// 1. Header Bar with Theme indicator and user/system counts
 		title := "ports live"
 		if filterPort > 0 {
 			title = fmt.Sprintf("ports live :%d", filterPort)
 		}
-		headerRaw := fmt.Sprintf("● %s  [%s]  %d listening ports", title, now, len(records))
 		var headerLine string
 		if theme.Enabled {
-			headerLine = fmt.Sprintf("%s%s● %s%s  %s[%s]%s  %s%d listening ports%s",
+			headerLine = fmt.Sprintf("%s%s● %s%s  %s[%s]%s  %s%d listening%s  %s(%d user, %d system)%s  %s[t] Theme: %s%s",
 				theme.Bold, theme.BrightCyan, title, theme.Reset,
 				theme.Dim, now, theme.Reset,
-				theme.Dim, len(records), theme.Reset,
+				theme.Bold, len(records), theme.Reset,
+				theme.Dim, userCount, systemCount, theme.Reset,
+				theme.Bold+theme.BrightMagenta, theme.Name, theme.Reset,
 			)
 		} else {
-			headerLine = headerRaw
+			headerLine = fmt.Sprintf("● %s  [%s]  %d listening (%d user, %d system)  [t] Theme: %s",
+				title, now, len(records), userCount, systemCount, theme.Name)
 		}
-		buf.WriteString(truncateANSI(headerLine, maxW) + "\033[K\r\n")
+		writeRow(headerLine)
 
 		// 2. Top Divider
 		if theme.Enabled {
-			buf.WriteString(theme.Dim + divider + theme.Reset + "\033[K\r\n")
+			writeRow(theme.Dim + divider + theme.Reset)
 		} else {
-			buf.WriteString(divider + "\033[K\r\n")
+			writeRow(divider)
 		}
 
-		// 2.5 Search Bar Box (llmfit style)
+		// 2.5 Search Bar Box
 		searchBoxTitle := " Search [/] "
 		if searchActive {
 			searchBoxTitle = " Search "
@@ -194,19 +261,19 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 		}
 		tLen := visibleLength(searchBoxTitle)
 		mLen := visibleLength(matchBadge)
-		fillLen := maxW - 2 - tLen - mLen
+		fillLen := width - 2 - tLen - mLen
 		if fillLen < 0 {
 			fillLen = 0
 		}
 		sbTop := "┌" + searchBoxTitle + strings.Repeat("─", fillLen) + matchBadge + "┐"
 		if theme.Enabled {
 			if searchActive {
-				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+sbTop+theme.Reset, maxW) + "\033[K\r\n")
+				writeRow(theme.Bold + theme.BrightCyan + sbTop + theme.Reset)
 			} else {
-				buf.WriteString(truncateANSI(theme.Dim+sbTop+theme.Reset, maxW) + "\033[K\r\n")
+				writeRow(theme.Dim + sbTop + theme.Reset)
 			}
 		} else {
-			buf.WriteString(truncateANSI(sbTop, maxW) + "\033[K\r\n")
+			writeRow(sbTop)
 		}
 
 		var promptText string
@@ -218,7 +285,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			promptText = "Press / to search by port or process name..."
 		}
 		pVis := visibleLength(promptText)
-		pPad := maxW - 4 - pVis
+		pPad := width - 4 - pVis
 		if pPad < 0 {
 			pPad = 0
 		}
@@ -235,29 +302,23 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			} else {
 				pStyled = theme.Dim + promptText + theme.Reset
 			}
-			buf.WriteString(fmt.Sprintf("%s│%s %s%s %s│%s\033[K\r\n", bColor, theme.Reset, pStyled, strings.Repeat(" ", pPad), bColor, theme.Reset))
+			writeRow(fmt.Sprintf("%s│%s %s%s %s│%s", bColor, theme.Reset, pStyled, strings.Repeat(" ", pPad), bColor, theme.Reset))
 		} else {
-			buf.WriteString(fmt.Sprintf("│ %s%s │\033[K\r\n", promptText, strings.Repeat(" ", pPad)))
+			writeRow(fmt.Sprintf("│ %s%s │", promptText, strings.Repeat(" ", pPad)))
 		}
 
-		sbBot := "└" + strings.Repeat("─", maxW-2) + "┘"
+		sbBot := "└" + strings.Repeat("─", width-2) + "┘"
 		if theme.Enabled {
 			if searchActive {
-				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+sbBot+theme.Reset, maxW) + "\033[K\r\n")
+				writeRow(theme.Bold + theme.BrightCyan + sbBot + theme.Reset)
 			} else {
-				buf.WriteString(truncateANSI(theme.Dim+sbBot+theme.Reset, maxW) + "\033[K\r\n")
+				writeRow(theme.Dim + sbBot + theme.Reset)
 			}
 		} else {
-			buf.WriteString(truncateANSI(sbBot, maxW) + "\033[K\r\n")
+			writeRow(sbBot)
 		}
 
 		// 3. Table Header
-		colPort := 7
-		colProto := 6
-		colAddr := 17
-		colProc := 15
-		colPID := 6
-
 		thLeft := fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
 			colPort, "PORT",
 			colProto, "PROTO",
@@ -281,24 +342,43 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			} else {
 				thLine = fmt.Sprintf("%-*s │ %s", splitWidth, thLeft, rightHdr)
 			}
-			buf.WriteString(truncateANSI(thLine, maxW) + "\033[K\r\n")
+			writeRow(thLine)
 		} else {
+			scrollInfo := ""
+			if len(filteredRecords) > contentHeight {
+				scrollInfo = fmt.Sprintf(" [%d/%d]", selectedIndex+1, len(filteredRecords))
+			}
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(theme.Dim+thLeft+theme.Reset, maxW) + "\033[K\r\n")
+				writeRow(theme.Dim + thLeft + theme.Reset + theme.Bold + theme.BrightCyan + scrollInfo + theme.Reset)
 			} else {
-				buf.WriteString(truncateANSI(thLeft, maxW) + "\033[K\r\n")
+				writeRow(thLeft + scrollInfo)
 			}
 		}
 
-		// Scroll calculation
-		if selectedIndex < scrollOffset {
-			scrollOffset = selectedIndex
+		// Robust scroll calculation & clamping
+		if selectedIndex < 0 {
+			selectedIndex = 0
 		}
-		if selectedIndex >= scrollOffset+contentHeight {
-			scrollOffset = selectedIndex - contentHeight + 1
+		if selectedIndex >= len(filteredRecords) && len(filteredRecords) > 0 {
+			selectedIndex = len(filteredRecords) - 1
 		}
-		if scrollOffset < 0 {
+
+		if len(filteredRecords) <= contentHeight {
 			scrollOffset = 0
+		} else {
+			if selectedIndex < scrollOffset {
+				scrollOffset = selectedIndex
+			}
+			if selectedIndex >= scrollOffset+contentHeight {
+				scrollOffset = selectedIndex - contentHeight + 1
+			}
+			maxScroll := len(filteredRecords) - contentHeight
+			if scrollOffset > maxScroll {
+				scrollOffset = maxScroll
+			}
+			if scrollOffset < 0 {
+				scrollOffset = 0
+			}
 		}
 
 		// Prepare side panel detail lines for selected item
@@ -354,6 +434,17 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			if sel.UptimeSeconds != nil {
 				detailLines = append(detailLines, formatDetailField(theme, "Uptime", proc.FormatDuration(*sel.UptimeSeconds)))
 			}
+		}
+
+		// Scrollbar metrics on vertical divider
+		thumbH := 1
+		thumbY := 0
+		if len(filteredRecords) > contentHeight {
+			thumbH = (contentHeight * contentHeight) / len(filteredRecords)
+			if thumbH < 1 {
+				thumbH = 1
+			}
+			thumbY = (scrollOffset * (contentHeight - thumbH)) / (len(filteredRecords) - contentHeight)
 		}
 
 		// 4. Render Content Rows
@@ -454,7 +545,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			leftVis := visibleLength(leftText)
 			pad := splitWidth - leftVis
 			if pad < 0 {
-				leftText = truncateANSI(leftText, splitWidth)
+				leftText = truncateANSI(leftText, splitWidth, theme.Reset)
 				pad = 0
 			}
 			leftPadded := leftText + strings.Repeat(" ", pad)
@@ -462,23 +553,46 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			if isSplit {
 				rightText := ""
 				if row < len(detailLines) {
-					rightText = truncateANSI(detailLines[row], rightWidth)
+					rightText = truncateANSI(detailLines[row], rightWidth, theme.Reset)
 				}
-				rowLine := fmt.Sprintf("%s │ %s", leftPadded, rightText)
-				buf.WriteString(truncateANSI(rowLine, maxW) + "\033[K\r\n")
+				divChar := "│"
+				if len(filteredRecords) > contentHeight {
+					if row >= thumbY && row < thumbY+thumbH {
+						if theme.Enabled {
+							divChar = theme.Bold + theme.BrightCyan + "█" + theme.Reset
+						} else {
+							divChar = "█"
+						}
+					} else {
+						if theme.Enabled {
+							divChar = theme.Dim + "│" + theme.Reset
+						} else {
+							divChar = "│"
+						}
+					}
+				} else {
+					if theme.Enabled {
+						divChar = theme.Dim + "│" + theme.Reset
+					} else {
+						divChar = "│"
+					}
+				}
+				rowLine := fmt.Sprintf("%s %s %s", leftPadded, divChar, rightText)
+				writeRow(rowLine)
 			} else {
-				buf.WriteString(truncateANSI(leftPadded, maxW) + "\033[K\r\n")
+				writeRow(leftPadded)
 			}
 		}
 
 		// 5. Bottom Divider
 		if theme.Enabled {
-			buf.WriteString(theme.Dim + divider + theme.Reset + "\033[K\r\n")
+			writeRow(theme.Dim + divider + theme.Reset)
 		} else {
-			buf.WriteString(divider + "\033[K\r\n")
+			writeRow(divider)
 		}
 
 		// 6. Footer Status Bar
+		var helpLine string
 		if confirmingKill && len(filteredRecords) > 0 && selectedIndex < len(filteredRecords) {
 			target := filteredRecords[selectedIndex]
 			sigName := "SIGTERM"
@@ -488,52 +602,94 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			prompt := fmt.Sprintf("⚠️  Kill '%s' (PID %d) with %s?  Press 'y' to confirm, 'n' to cancel",
 				target.Process, target.PID, sigName)
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(fmt.Sprintf("%s%s%s%s", theme.Bold, theme.Yellow, prompt, theme.Reset), maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s%s%s%s", theme.Bold, theme.Yellow, prompt, theme.Reset)
 			} else {
-				buf.WriteString(truncateANSI(prompt, maxW) + "\033[K")
+				helpLine = prompt
 			}
 		} else if statusMsg != "" && time.Now().Before(statusMsgTimer) {
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(fmt.Sprintf("%s%s%s", theme.BrightGreen, statusMsg, theme.Reset), maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s✓ %s%s", theme.Bold+theme.BrightGreen, statusMsg, theme.Reset)
 			} else {
-				buf.WriteString(truncateANSI(statusMsg, maxW) + "\033[K")
+				helpLine = "✓ " + statusMsg
 			}
 		} else if showActionMenu {
-			helpText := "[↑/↓/1-6] Choose Option  │  [Enter] Execute  │  [Esc/q] Close Menu"
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s[↑/↓/1-6]%s Choose  %s│%s  %s[Enter]%s Execute  %s│%s  %s[Esc/q]%s Close",
+					theme.Bold+theme.BrightCyan, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightWhite, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Red, theme.Reset,
+				)
 			} else {
-				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+				helpLine = "[↑/↓/1-6] Choose  │  [Enter] Execute  │  [Esc/q] Close"
 			}
 		} else if searchActive {
-			helpText := "[Type] Live filter  │  [Enter/↓] Focus Table  │  [Ctrl+U] Clear  │  [Esc] Done"
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(theme.Bold+theme.BrightCyan+helpText+theme.Reset, maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s[Type]%s Filter  %s│%s  %s[Enter/↓]%s Table  %s│%s  %s[Ctrl+U]%s Clear  %s│%s  %s[Esc]%s Cancel",
+					theme.Bold+theme.BrightGreen, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightCyan, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Yellow, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Red, theme.Reset,
+				)
 			} else {
-				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+				helpLine = "[Type] Filter  │  [Enter/↓] Table  │  [Ctrl+U] Clear  │  [Esc] Cancel"
 			}
 		} else if searchQuery != "" {
-			helpText := "[↑/↓/j/k] Navigate  │  [/] Search  │  [Esc] Clear Filter  │  [Enter/Click] Menu  │  [q] Quit"
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s[↑/↓/j/k]%s Navigate  %s│%s  %s[/]%s Search  %s│%s  %s[Esc]%s Clear  %s│%s  %s[Enter]%s Menu  %s│%s  %s[t]%s Theme  %s│%s  %s[q]%s Quit",
+					theme.Bold+theme.BrightCyan, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightYellow, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Yellow, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightGreen, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightMagenta, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Red, theme.Reset,
+				)
 			} else {
-				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+				helpLine = "[↑/↓/j/k] Navigate  │  [/] Search  │  [Esc] Clear  │  [Enter] Menu  │  [t] Theme  │  [q] Quit"
 			}
 		} else {
-			helpText := "[↑/↓/j/k] Navigate  │  [/] Search  │  [Enter/Click] Menu  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
 			if theme.Enabled {
-				buf.WriteString(truncateANSI(theme.Dim+helpText+theme.Reset, maxW) + "\033[K")
+				helpLine = fmt.Sprintf("%s[↑/↓/j/k]%s Navigate  %s│%s  %s[/]%s Search  %s│%s  %s[Enter]%s Menu  %s│%s  %s[t]%s Theme  %s│%s  %s[x]%s Kill  %s│%s  %s[r]%s Refresh  %s│%s  %s[q]%s Quit",
+					theme.Bold+theme.BrightCyan, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightYellow, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightGreen, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightMagenta, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Red, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Bold+theme.BrightGreen, theme.Reset,
+					theme.Dim, theme.Reset,
+					theme.Dim+theme.Red, theme.Reset,
+				)
 			} else {
-				buf.WriteString(truncateANSI(helpText, maxW) + "\033[K")
+				helpLine = "[↑/↓/j/k] Navigate  │  [/] Search  │  [Enter] Menu  │  [t] Theme  │  [x] Kill  │  [r] Refresh  │  [q] Quit"
 			}
+		}
+		writeRow(helpLine)
+
+		// Fill remaining rows down to the bottom with the theme background color
+		for currentLine < height {
+			writeRow("")
 		}
 
 		// 7. Floating Action Menu Modal
 		if showActionMenu && len(filteredRecords) > 0 && selectedIndex < len(filteredRecords) {
 			target := filteredRecords[selectedIndex]
 			boxW = 50
-			if boxW > maxW-2 {
-				boxW = maxW - 2
+			if boxW > width-2 {
+				boxW = width - 2
 			}
 			innerWidth := boxW - 4
 			if innerWidth < 20 {
@@ -555,7 +711,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			}
 			titleLen := visibleLength(titleStr)
 			if titleLen > innerWidth {
-				titleStr = truncateANSI(titleStr, innerWidth)
+				titleStr = truncateANSI(titleStr, innerWidth, theme.Reset)
 				titleLen = visibleLength(titleStr)
 			}
 			sideLen := (boxW - 2 - titleLen) / 2
@@ -568,7 +724,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			}
 			topBorder := "┌" + strings.Repeat("─", sideLen) + titleStr + strings.Repeat("─", rightLen) + "┐"
 			if theme.Enabled {
-				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s", menuStartY, menuStartX, theme.Bold+theme.BrightCyan, topBorder, theme.Reset)
+				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s%s", menuStartY, menuStartX, theme.BgEscape, theme.Bold+theme.BrightCyan, topBorder, theme.Reset)
 			} else {
 				fmt.Fprintf(&buf, "\033[%d;%dH%s", menuStartY, menuStartX, topBorder)
 			}
@@ -585,7 +741,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					avail = 10
 				}
 				if visibleLength(content) > avail {
-					content = truncateANSI(content, avail)
+					content = truncateANSI(content, avail, theme.Reset)
 				}
 				pad := avail - visibleLength(content)
 				if pad < 0 {
@@ -604,7 +760,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				}
 
 				if theme.Enabled {
-					fmt.Fprintf(&buf, "\033[%d;%dH%s│%s %s %s│%s", rowY, menuStartX, theme.BrightCyan, theme.Reset, lineText, theme.BrightCyan, theme.Reset)
+					fmt.Fprintf(&buf, "\033[%d;%dH%s%s│%s %s %s│%s", rowY, menuStartX, theme.BgEscape, theme.BrightCyan, theme.Reset, lineText, theme.BrightCyan, theme.Reset)
 				} else {
 					fmt.Fprintf(&buf, "\033[%d;%dH│ %s │", rowY, menuStartX, lineText)
 				}
@@ -614,14 +770,14 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			hintY := menuStartY + 1 + len(menuItems)
 			hintText := "[1-6] Choose  │  [Esc] Close"
 			if visibleLength(hintText) > innerWidth {
-				hintText = truncateANSI(hintText, innerWidth)
+				hintText = truncateANSI(hintText, innerWidth, theme.Reset)
 			}
 			hPad := innerWidth - visibleLength(hintText)
 			if hPad < 0 {
 				hPad = 0
 			}
 			if theme.Enabled {
-				fmt.Fprintf(&buf, "\033[%d;%dH%s│%s %s%s%s%s %s│%s", hintY, menuStartX, theme.BrightCyan, theme.Reset, theme.Dim, hintText, strings.Repeat(" ", hPad), theme.Reset, theme.BrightCyan, theme.Reset)
+				fmt.Fprintf(&buf, "\033[%d;%dH%s%s│%s %s%s%s%s %s│%s", hintY, menuStartX, theme.BgEscape, theme.BrightCyan, theme.Reset, theme.Dim, hintText, strings.Repeat(" ", hPad), theme.Reset, theme.BrightCyan, theme.Reset)
 			} else {
 				fmt.Fprintf(&buf, "\033[%d;%dH│ %s%s │", hintY, menuStartX, hintText, strings.Repeat(" ", hPad))
 			}
@@ -629,7 +785,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 			// Bottom border
 			botBorder := "└" + strings.Repeat("─", boxW-2) + "┘"
 			if theme.Enabled {
-				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s", menuStartY+boxH-1, menuStartX, theme.Bold+theme.BrightCyan, botBorder, theme.Reset)
+				fmt.Fprintf(&buf, "\033[%d;%dH%s%s%s%s", menuStartY+boxH-1, menuStartX, theme.BgEscape, theme.Bold+theme.BrightCyan, botBorder, theme.Reset)
 			} else {
 				fmt.Fprintf(&buf, "\033[%d;%dH%s", menuStartY+boxH-1, menuStartX, botBorder)
 			}
@@ -713,7 +869,16 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 
 	for {
 		select {
-		case <-sigChan:
+		case sig := <-sigChan:
+			if sig == syscall.SIGWINCH {
+				if theme.BgEscape != "" {
+					fmt.Printf("%s\033[2J\033[H", theme.BgEscape)
+				} else {
+					fmt.Printf("\033[49m\033[2J\033[H")
+				}
+				draw()
+				continue
+			}
 			return nil
 
 		case <-ticker.C:
@@ -743,7 +908,10 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 							} else if searchActive {
 								// In search bar: keep
 							} else if selectedIndex > 0 {
-								selectedIndex--
+								selectedIndex -= 2
+								if selectedIndex < 0 {
+									selectedIndex = 0
+								}
 							}
 							draw()
 							continue
@@ -753,7 +921,10 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 							} else if searchActive {
 								// In search bar: keep
 							} else if selectedIndex < len(filteredRecords)-1 {
-								selectedIndex++
+								selectedIndex += 2
+								if selectedIndex >= len(filteredRecords) {
+									selectedIndex = len(filteredRecords) - 1
+								}
 							}
 							draw()
 							continue
@@ -794,7 +965,7 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 				}
 			}
 
-			// Arrow keys
+			// Escape sequences: arrows, page up/down, home/end
 			if len(input) >= 3 && input[0] == 0x1b && input[1] == '[' {
 				switch input[2] {
 				case 'A': // Up
@@ -829,6 +1000,55 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					}
 					continue
 				case 'C', 'D': // Right, Left
+					continue
+				case 'H', '1', '7': // Home (\x1b[H, \x1b[1~, \x1b[7~)
+					if !searchActive && len(filteredRecords) > 0 {
+						selectedIndex = 0
+						draw()
+					}
+					continue
+				case 'F', '4', '8': // End (\x1b[F, \x1b[4~, \x1b[8~)
+					if !searchActive && len(filteredRecords) > 0 {
+						selectedIndex = len(filteredRecords) - 1
+						draw()
+					}
+					continue
+				case '5': // Page Up (\x1b[5~)
+					if showActionMenu {
+						menuSelection = 0
+						draw()
+					} else if !searchActive && len(filteredRecords) > 0 {
+						selectedIndex -= contentHeight
+						if selectedIndex < 0 {
+							selectedIndex = 0
+						}
+						draw()
+					}
+					continue
+				case '6': // Page Down (\x1b[6~)
+					if showActionMenu {
+						menuSelection = len(menuItems) - 1
+						draw()
+					} else if !searchActive && len(filteredRecords) > 0 {
+						selectedIndex += contentHeight
+						if selectedIndex >= len(filteredRecords) {
+							selectedIndex = len(filteredRecords) - 1
+						}
+						draw()
+					}
+					continue
+				}
+			}
+
+			// SS3 sequences: \x1bOH (Home), \x1bOF (End)
+			if len(input) >= 3 && input[0] == 0x1b && input[1] == 'O' {
+				if input[2] == 'H' && !searchActive && len(filteredRecords) > 0 {
+					selectedIndex = 0
+					draw()
+					continue
+				} else if input[2] == 'F' && !searchActive && len(filteredRecords) > 0 {
+					selectedIndex = len(filteredRecords) - 1
+					draw()
 					continue
 				}
 			}
@@ -1004,6 +1224,49 @@ func WatchTUI(filterPort uint16, interval time.Duration) error {
 					draw()
 				}
 
+			case 'g': // Jump to top
+				if len(filteredRecords) > 0 {
+					selectedIndex = 0
+					draw()
+				}
+
+			case 'G': // Jump to bottom
+				if len(filteredRecords) > 0 {
+					selectedIndex = len(filteredRecords) - 1
+					draw()
+				}
+
+			case 4, 6: // Ctrl+D (4) or Ctrl+F (6): Page Down
+				if len(filteredRecords) > 0 {
+					selectedIndex += contentHeight / 2
+					if selectedIndex >= len(filteredRecords) {
+						selectedIndex = len(filteredRecords) - 1
+					}
+					draw()
+				}
+
+			case 21, 2: // Ctrl+U (21) or Ctrl+B (2): Page Up
+				if len(filteredRecords) > 0 {
+					selectedIndex -= contentHeight / 2
+					if selectedIndex < 0 {
+						selectedIndex = 0
+					}
+					draw()
+				}
+
+			case 't', 'T':
+				currentThemeDef = CycleTheme(currentThemeDef.ID)
+				theme = currentThemeDef.BuildTheme(true)
+				_ = config.Save(&config.Config{Theme: currentThemeDef.ID})
+				statusMsg = fmt.Sprintf("Theme: %s", currentThemeDef.Name)
+				statusMsgTimer = time.Now().Add(2 * time.Second)
+				if theme.BgEscape != "" {
+					fmt.Printf("%s\033[2J\033[H", theme.BgEscape)
+				} else {
+					fmt.Printf("\033[49m\033[2J\033[H")
+				}
+				draw()
+
 			case 'r', 'R':
 				refreshData()
 				statusMsg = "Refreshed"
@@ -1050,9 +1313,13 @@ func formatDetailField(theme *Theme, label, val string) string {
 
 // truncateANSI truncates a string to at most maxWidth visible columns without cutting
 // through ANSI escape sequences or leaving unterminated styles.
-func truncateANSI(s string, maxWidth int) string {
+func truncateANSI(s string, maxWidth int, resetCode ...string) string {
 	if maxWidth <= 0 {
 		return ""
+	}
+	reset := "\033[0m"
+	if len(resetCode) > 0 && resetCode[0] != "" {
+		reset = resetCode[0]
 	}
 	var res bytes.Buffer
 	visible := 0
@@ -1079,7 +1346,7 @@ func truncateANSI(s string, maxWidth int) string {
 			visible++
 		}
 	}
-	res.WriteString("\033[0m")
+	res.WriteString(reset)
 	return res.String()
 }
 
