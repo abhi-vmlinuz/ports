@@ -44,6 +44,15 @@ func TestRootCmdFlags(t *testing.T) {
 	if watchFlag.Shorthand != "w" {
 		t.Errorf("expected shorthand 'w' for watch, got %q", watchFlag.Shorthand)
 	}
+
+	// PID flag
+	pidFlag := cmd.Flags().Lookup("pid")
+	if pidFlag == nil {
+		t.Fatal("expected --pid flag to exist")
+	}
+	if pidFlag.Shorthand != "p" {
+		t.Errorf("expected shorthand 'p' for pid, got %q", pidFlag.Shorthand)
+	}
 }
 
 func TestThemeListExecution(t *testing.T) {
@@ -83,5 +92,18 @@ func TestJSONOutputExecution(t *testing.T) {
 	output := buf.String()
 	if !strings.HasPrefix(strings.TrimSpace(output), "[") {
 		t.Errorf("expected JSON array output, got: %s", output)
+	}
+}
+
+func TestPIDOutputFlag(t *testing.T) {
+	cmd := NewRootCmd("test")
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"99999", "--pid"})
+
+	// Port 99999 should not exist (exit code 1)
+	err := cmd.Execute()
+	if err == nil {
+		t.Errorf("expected error for non-existent port with --pid")
 	}
 }

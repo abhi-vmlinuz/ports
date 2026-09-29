@@ -101,6 +101,21 @@ func TestFilterRecords(t *testing.T) {
 			wantPorts: []uint16{5432},
 		},
 		{
+			name:      "Filter by PID numeric",
+			query:     "812",
+			wantPorts: []uint16{22},
+		},
+		{
+			name:      "Filter by PID with prefix",
+			query:     "pid:9121",
+			wantPorts: []uint16{8080},
+		},
+		{
+			name:      "Filter by PID substring",
+			query:     "1932",
+			wantPorts: []uint16{5432},
+		},
+		{
 			name:      "Non-matching query",
 			query:     "nonexistent",
 			wantPorts: nil,

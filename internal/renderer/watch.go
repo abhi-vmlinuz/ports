@@ -498,6 +498,7 @@ func WatchTUI(filterPort uint16, interval time.Duration, themeID ...string) erro
 
 						portHighlighted := HighlightMatches(portStr, searchQuery, theme, theme.BrightCyan)
 						procHighlighted := HighlightMatches(procStr, searchQuery, theme, pColor)
+						pidHighlighted := HighlightMatches(pidStr, searchQuery, theme, uColor)
 
 						portPad := colPort - visibleLength(portHighlighted)
 						if portPad < 0 {
@@ -507,13 +508,17 @@ func WatchTUI(filterPort uint16, interval time.Duration, themeID ...string) erro
 						if procPad < 0 {
 							procPad = 0
 						}
+						pidPad := colPID - visibleLength(pidHighlighted)
+						if pidPad < 0 {
+							pidPad = 0
+						}
 
-						leftText = fmt.Sprintf("  %s%s %s%-*s%s %-*s %s%s %s%-*s%s",
+						leftText = fmt.Sprintf("  %s%s %s%-*s%s %-*s %s%s %s%s",
 							portHighlighted, strings.Repeat(" ", portPad),
 							theme.Gray, colProto, r.Protocol, theme.Reset,
 							colAddr, addrStr,
 							procHighlighted, strings.Repeat(" ", procPad),
-							uColor, colPID, pidStr, theme.Reset,
+							pidHighlighted, strings.Repeat(" ", pidPad),
 						)
 					}
 				} else {

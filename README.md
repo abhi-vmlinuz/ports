@@ -100,10 +100,10 @@ ports
 - **Split layout**: The left pane lists active ports with protocol, bind address, process name, and PID. The right pane shows comprehensive metadata (origin controller, user, CWD, full command line, and uptime) for the selected process.
 - **Theme support (`t`)**: Press `t` to cycle through 16 built-in TrueColor themes in real time. Each styled theme paints the entire terminal window with solid 24-bit background colors matching `rinode` (Cyberpunk, Catppuccin, Gruvbox, etc.), while `default` preserves transparent terminal wallpapers. Your choice is automatically persisted to `~/.config/ports/config.json` (and cleanly saved to `$SUDO_USER`'s home directory when running under `sudo`).
 - **Live search bar (`/`)**: Press `/` or click the search box to search ports and processes. Filters in real time on **every keystroke** (like `fzf`):
-  - Numeric queries match port numbers (`80`, `:3000`).
+  - Numeric queries match port numbers (`80`, `:3000`) and process PIDs (`1435`, `pid:1435`).
   - Text queries match process names with substring and fuzzy subsequence matching (`brave`, `brv`, `node`).
   - Multi-token queries supported (`node 8080`, `tcp 53`, `docker 3000`).
-  - Matched characters are highlighted directly in the table.
+  - Matched characters in Port, Process, and PID columns are highlighted directly in the table.
   - Press `Enter` or `↓` to focus the filtered table; press `Esc` to clear the filter.
 - **Navigation & Scrolling**: Move selection with `↑` / `↓` or Vim `j` / `k`. Scroll smoothly through long lists with mouse wheel, `PageUp` / `PageDown` (`Ctrl+D` / `Ctrl+U`), and jump directly to top or bottom with `Home` / `End` (`g` / `G`). The TUI dynamically handles window resize (`SIGWINCH`), seamlessly adapting column widths, toggling split layout on narrow windows, and clamping scroll offsets to prevent blank spaces.
 - **Action popup modal**: Press `Enter`, `Space`, `m`, or click any port row to open the interactive action menu:
@@ -187,6 +187,27 @@ ports :3000
 ```
 
 If multiple processes or protocols bind the same port (for example, separate IPv4 and IPv6 listeners), each record is displayed.
+
+### Scripting: Print PID only (`--pid`, `-p`)
+
+When writing shell scripts, aliases, or CI pipelines, pass `--pid` (or `-p`) to output only the PID of the process listening on a port:
+
+```bash
+# Terminate process on port 3000
+kill $(ports 3000 -p)
+
+# Force-kill whatever is holding port 8080
+kill -9 $(ports 8080 --pid)
+
+# Check if port 5432 has an active listener
+if pid=$(ports 5432 -p 2>/dev/null); then
+  echo "Database running with PID $pid"
+fi
+```
+
+- Outputs only the numeric PID to stdout with zero formatting or header text.
+- If multiple processes are bound to the port, distinct PIDs are printed on separate lines.
+- Exits with return code `0` if a PID was found, or `1` if the port is unoccupied or the PID cannot be resolved.
 
 ### Kill a process on a port
 

@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -26,20 +25,15 @@ func NewCardRenderer(theme *Theme) *CardRenderer {
 	home := ""
 
 	if current != "" {
-		// When run under sudo, look up home directory of the original user
 		if u, err := user.Lookup(current); err == nil {
 			home = u.HomeDir
 		}
-	}
-
-	if current == "" {
-		if u, err := user.Current(); err == nil {
-			current = u.Username
-			home = u.HomeDir
-		} else {
-			current = os.Getenv("USER")
-			home = os.Getenv("HOME")
-		}
+	} else if u, err := user.Current(); err == nil && u.Username != "" {
+		current = u.Username
+		home = u.HomeDir
+	} else {
+		current = os.Getenv("USER")
+		home = os.Getenv("HOME")
 	}
 
 	return &CardRenderer{
@@ -208,12 +202,4 @@ func (cr *CardRenderer) printField(w io.Writer, label, formattedValue string) {
 	} else {
 		fmt.Fprintf(w, "%-12s%s\n", label+":", formattedValue)
 	}
-}
-
-// AbbreviateHome replaces $HOME with ~ if present.
-func AbbreviateHome(path, home string) string {
-	if home != "" && strings.HasPrefix(path, home) {
-		return filepath.Join("~", strings.TrimPrefix(path, home))
-	}
-	return path
 }

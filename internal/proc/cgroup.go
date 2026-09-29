@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ var (
 // such as "docker (3b3b6fe5f770)", "systemd (nginx.service)", or "interactive".
 // Returns empty string if the cgroup cannot be read or categorized.
 func DetectOrigin(procPath string, pid int) string {
-	cgroupPath := filepath.Join(procPath, strconvItoa(pid), "cgroup")
+	cgroupPath := filepath.Join(procPath, strconv.Itoa(pid), "cgroup")
 	f, err := os.Open(cgroupPath)
 	if err != nil {
 		return ""
@@ -138,29 +139,4 @@ func classifyCgroupPath(path string) string {
 	return ""
 }
 
-// strconvItoa avoids importing strconv if not needed, but strconv.Itoa is fine.
-func strconvItoa(val int) string {
-	return strconvFormatInt(int64(val), 10)
-}
 
-func strconvFormatInt(i int64, base int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b [32]byte
-	bp := len(b)
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	for i > 0 {
-		bp--
-		b[bp] = byte('0' + (i % 10))
-		i /= 10
-	}
-	if neg {
-		bp--
-		b[bp] = '-'
-	}
-	return string(b[bp:])
-}

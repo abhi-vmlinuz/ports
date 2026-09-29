@@ -32,6 +32,7 @@ func NewRootCmd(version string) *cobra.Command {
 	var noColor bool
 	var watch bool
 	var snapshot bool
+	var pidOnly bool
 	var themeFlag string
 
 	cmd := &cobra.Command{
@@ -44,6 +45,7 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 		Example: `  ports                  # Interactive TUI dashboard (default in terminal)
   ports -s               # Static snapshot table
   ports 3000             # Fast inspection card for port 3000
+  ports 3000 -p          # Print only PID for scripts (e.g. kill $(ports 3000 -p))
   ports 3000 -w          # Watch port 3000 continuously in TUI
   ports -t catppuccin    # Launch with Catppuccin theme
   ports -t list          # List all 16 available themes
@@ -60,8 +62,42 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 			}
 
 			if themeFlag != "" && !renderer.IsValidTheme(themeFlag) {
-				fmt.Fprintf(os.Stderr, "error: unknown theme '%s'. Run 'ports --theme list' to see available themes.\n", themeFlag)
-				os.Exit(2)
+				return fmt.Errorf("unknown theme '%s'. Run 'ports --theme list' to see available themes.", themeFlag)
+			}
+
+			discoverer := proc.NewDiscoverer("/proc")
+
+			// Scripting flag: output only PID for port
+			if pidOnly {
+				if len(args) == 0 {
+					return fmt.Errorf("--pid requires a port argument (e.g. ports 3000 --pid)")
+				}
+				port, err := ParsePortArgument(args[0])
+				if err != nil {
+					return err
+				}
+				records, err := discoverer.DiscoverPort(port)
+				if err != nil {
+					return fmt.Errorf("failed to inspect port %d: %w", port, err)
+				}
+
+				seen := make(map[int]bool)
+				var pids []int
+				for _, r := range records {
+					if r.PID > 0 && !seen[r.PID] {
+						seen[r.PID] = true
+						pids = append(pids, r.PID)
+					}
+				}
+
+				if len(pids) == 0 {
+					return fmt.Errorf("no process found listening on port %d", port)
+				}
+
+				for _, pid := range pids {
+					fmt.Fprintln(out, pid)
+				}
+				return nil
 			}
 
 			// Explicit watch mode
@@ -70,8 +106,7 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 				if len(args) == 1 {
 					p, err := ParsePortArgument(args[0])
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "error: %v\n", err)
-						os.Exit(2)
+						return err
 					}
 					port = p
 				}
@@ -85,30 +120,25 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 			}
 
 			theme := renderer.NewTheme(noColor, themeFlag)
-			discoverer := proc.NewDiscoverer("/proc")
 
 			// Single port inspection mode
 			if len(args) == 1 {
 				port, err := ParsePortArgument(args[0])
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-					os.Exit(2)
+					return err
 				}
 
 				records, err := discoverer.DiscoverPort(port)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: failed to inspect port %d: %v\n", port, err)
-					os.Exit(1)
+					return fmt.Errorf("failed to inspect port %d: %w", port, err)
 				}
 
 				if jsonOutput {
-					jsonRenderer := renderer.NewJSONRenderer()
-					if err := jsonRenderer.Render(out, records); err != nil {
-						fmt.Fprintf(os.Stderr, "error: %v\n", err)
-						os.Exit(1)
+					if err := renderer.RenderJSON(out, records); err != nil {
+						return err
 					}
 					if len(records) == 0 {
-						os.Exit(1)
+						return fmt.Errorf("port %d is not in use", port)
 					}
 					return nil
 				}
@@ -119,7 +149,7 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 					} else {
 						fmt.Fprintf(out, "Port %d is not in use.\n", port)
 					}
-					os.Exit(1)
+					return fmt.Errorf("port %d is not in use", port)
 				}
 
 				cardRenderer := renderer.NewCardRenderer(theme)
@@ -129,13 +159,11 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 			// Listing mode (snapshot table or piped / redirected / non-TTY)
 			records, err := discoverer.DiscoverAll()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: failed to discover ports: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to discover ports: %w", err)
 			}
 
 			if jsonOutput {
-				jsonRenderer := renderer.NewJSONRenderer()
-				return jsonRenderer.Render(out, records)
+				return renderer.RenderJSON(out, records)
 			}
 
 			tableRenderer := renderer.NewTableRenderer(theme)
@@ -149,6 +177,7 @@ It directly inspects Linux /proc interfaces without relying on lsof or netstat.`
 	cmd.Flags().BoolVarP(&snapshot, "snapshot", "s", false, "render static snapshot table instead of opening interactive TUI")
 	cmd.Flags().BoolVar(&snapshot, "table", false, "alias for --snapshot")
 	_ = cmd.Flags().MarkHidden("table")
+	cmd.Flags().BoolVarP(&pidOnly, "pid", "p", false, "output only the PID(s) of the process listening on the specified port")
 	cmd.Flags().StringVarP(&themeFlag, "theme", "t", "", "color theme (e.g. catppuccin, nord, cyberpunk, or 'list')")
 
 	cmd.AddCommand(newKillCmd())

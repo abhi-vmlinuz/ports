@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"ports/internal/model"
 )
@@ -12,8 +11,9 @@ import (
 // FilterRecords filters a slice of PortRecord based on a search query.
 // It supports:
 // - Exact, prefix, and substring matches on port numbers (e.g. "80", ":8080")
+// - PID matches (numeric or "pid:1234")
 // - Case-insensitive substring and fuzzy subsequence matches on process names (e.g. "brave", "brv")
-// - Protocol ("tcp", "udp") and user name matching
+// - Protocol ("tcp", "udp"), user name, and origin matching
 // - Multi-token queries (e.g. "node 3000", "tcp 53") where all tokens must match
 func FilterRecords(records []model.PortRecord, query string) []model.PortRecord {
 	trimmed := strings.TrimSpace(query)
@@ -37,6 +37,10 @@ func FilterRecords(records []model.PortRecord, query string) []model.PortRecord 
 
 func recordMatches(r model.PortRecord, tokens []string) bool {
 	portStr := strconv.Itoa(int(r.Port))
+	pidStr := ""
+	if r.PID > 0 {
+		pidStr = strconv.Itoa(r.PID)
+	}
 	procLower := strings.ToLower(r.Process)
 	protoLower := strings.ToLower(r.Protocol)
 	userLower := ""
@@ -54,15 +58,20 @@ func recordMatches(r model.PortRecord, tokens []string) bool {
 		matched := false
 
 		if isDigits {
-			// Numeric token: prioritize port number match
-			if strings.Contains(portStr, cleanToken) {
+			// Numeric token: match port number, PID, or process name substring
+			if strings.Contains(portStr, cleanToken) || (pidStr != "" && strings.Contains(pidStr, cleanToken)) {
 				matched = true
 			} else if strings.Contains(procLower, token) {
 				matched = true
 			}
 		} else {
-			// Text token: match process name (substring or fuzzy), protocol, user, or origin
-			if strings.Contains(procLower, token) {
+			// Text token: match process name (substring or fuzzy), PID alias (pid:123), protocol, user, or origin
+			if strings.HasPrefix(token, "pid:") {
+				targetPID := strings.TrimPrefix(token, "pid:")
+				if pidStr != "" && strings.Contains(pidStr, targetPID) {
+					matched = true
+				}
+			} else if strings.Contains(procLower, token) {
 				matched = true
 			} else if isSubsequence(token, procLower) {
 				matched = true
@@ -87,7 +96,7 @@ func isAllDigits(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !unicode.IsDigit(r) {
+		if r < '0' || r > '9' {
 			return false
 		}
 	}
