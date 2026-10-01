@@ -15,8 +15,9 @@ var (
 	podmanScopeRegex = regexp.MustCompile(`libpod-([0-9a-fA-F]{12,64})\.scope`)
 	podmanPathRegex  = regexp.MustCompile(`(?:/libpod|/podman)/([0-9a-fA-F]{12,64})`)
 	k8sPodRegex      = regexp.MustCompile(`pod([0-9a-fA-F_-]{8,36})`)
-	systemdUserRegex = regexp.MustCompile(`user@\d+\.service/(?:app\.slice/)?([a-zA-Z0-9_\-\.@]+\.service)`)
-	systemdSysRegex  = regexp.MustCompile(`(?:system\.slice/)([a-zA-Z0-9_\-\.@]+\.service)`)
+	systemdUserRegex = regexp.MustCompile(`user@\d+\.service/(?:[\w\-\.@]+\.slice/)*([a-zA-Z0-9_\-\.@]+\.service)`)
+	systemdSysRegex  = regexp.MustCompile(`(?:system\.slice/)(?:[\w\-\.@]+\.slice/)*([a-zA-Z0-9_\-\.@]+\.service)`)
+	termScopeRegex   = regexp.MustCompile(`(?:^|/)(?:app-)?(kitty|alacritty|wezterm|foot|ghostty|ptyxis|vte-spawn)(?:-[0-9a-zA-Z_-]+)?\.scope`)
 	appScopeRegex    = regexp.MustCompile(`app(?:-gnome)?-([a-zA-Z0-9_\-\.]+?)(?:-[0-9]+)?\.scope`)
 )
 
@@ -119,19 +120,29 @@ func classifyCgroupPath(path string) string {
 		return "systemd (" + m[1] + ")"
 	}
 
-	// 7. Desktop App scope
+	// 7. Terminal emulator scope
+	if m := termScopeRegex.FindStringSubmatch(path); len(m) > 1 {
+		termName := m[1]
+		if termName == "vte-spawn" {
+			termName = "terminal"
+		}
+		return "interactive (" + termName + ")"
+	}
+
+	// 8. Desktop App scope
 	if m := appScopeRegex.FindStringSubmatch(path); len(m) > 1 {
 		name := m[1]
 		name = strings.TrimPrefix(name, "app-")
 		return "app (" + name + ")"
 	}
 
-	// 8. Interactive terminal session
-	if strings.Contains(path, "session-") && strings.Contains(path, ".scope") {
+	// 9. Interactive terminal session
+	if (strings.Contains(path, "session-") && strings.Contains(path, ".scope")) ||
+		strings.Contains(path, "session.slice") {
 		return "interactive"
 	}
 
-	// 9. Init system
+	// 10. Init system
 	if strings.Contains(path, "init.scope") {
 		return "init"
 	}

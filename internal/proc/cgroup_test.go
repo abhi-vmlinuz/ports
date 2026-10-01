@@ -66,6 +66,31 @@ func TestParseCgroupPaths(t *testing.T) {
 			expected: "interactive",
 		},
 		{
+			name:     "cgroup v2 nested systemd system service",
+			paths:    []string{"/system.slice/system-cups.slice/cups.service"},
+			expected: "systemd (cups.service)",
+		},
+		{
+			name:     "cgroup v2 kitty terminal scope",
+			paths:    []string{"/user.slice/user-1000.slice/user@1000.service/kitty-24810-0.scope"},
+			expected: "interactive (kitty)",
+		},
+		{
+			name:     "cgroup v2 alacritty terminal scope",
+			paths:    []string{"/user.slice/user-1000.slice/user@1000.service/app-alacritty-1234.scope"},
+			expected: "interactive (alacritty)",
+		},
+		{
+			name:     "cgroup v2 vte-spawn terminal scope",
+			paths:    []string{"/user.slice/user-1000.slice/user@1000.service/vte-spawn-9876.scope"},
+			expected: "interactive (terminal)",
+		},
+		{
+			name:     "cgroup v2 session slice",
+			paths:    []string{"/user.slice/user-1000.slice/user@1000.service/session.slice"},
+			expected: "interactive",
+		},
+		{
 			name:     "cgroup v2 init scope",
 			paths:    []string{"/init.scope"},
 			expected: "init",
